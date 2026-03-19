@@ -29,8 +29,8 @@
     }
 
     textarea {
-      width: 300px;
-      height: 150px;
+      width: 400px;
+      height: 300px;
     }
 
     button {
@@ -49,6 +49,10 @@
   <div id="ui">
     <textarea id="code" maxlength="1000">
 // ejemplo Hydra
+// Puedes cambiar el código y hacer click en RUN para ver los cambios
+// También puedes cambiar la cantidad de quads y arrastrar los vértices para mapear la imagen
+// Atajos de teclado: CTRL + SHIFT + H para mostrar/ocultar la UI
+
 osc(1,1,1)
   .out()
     </textarea>
@@ -78,7 +82,7 @@ osc(1,1,1)
     var hydra = new Hydra({ canvas: document.getElementById("myCanvas") })   // 👈 importante
 
 
-osc(1, 1, 1)
+    osc(1, 1, 1)
       .out();
 
     const BLOCKED = [
@@ -173,26 +177,26 @@ osc(1, 1, 1)
       }
     }
 
-function setQuadCount(n) {
-  n = int(n);
-  quads = [];
+    function setQuadCount(n) {
+      n = int(n);
+      quads = [];
 
-  let spacing = 500; // distancia entre quads
-  let totalWidth = (n - 1) * spacing;
+      let spacing = 500; // distancia entre quads
+      let totalWidth = (n - 1) * spacing;
 
-  for (let i = 0; i < n; i++) {
+      for (let i = 0; i < n; i++) {
 
-    // posición centrada
-    let xOffset = i * spacing - totalWidth / 2;
+        // posición centrada
+        let xOffset = i * spacing - totalWidth / 2;
 
-    quads.push([
-      createVector(-200 + xOffset, -200),
-      createVector( 200 + xOffset, -200),
-      createVector( 200 + xOffset,  200),
-      createVector(-200 + xOffset,  200)
-    ]);
-  }
-}
+        quads.push([
+          createVector(-200 + xOffset, -200),
+          createVector(200 + xOffset, -200),
+          createVector(200 + xOffset, 200),
+          createVector(-200 + xOffset, 200)
+        ]);
+      }
+    }
 
     // --- INTERACCIÓN ---
 
@@ -219,19 +223,19 @@ function setQuadCount(n) {
         selected = i;
       }
     }
-    
 
-function mouseDragged(){
-  if (selected.quad != -1) {
-    let v = quads[selected.quad][selected.vert];
-    v.x = mouseX - width / 2;
-    v.y = mouseY - height / 2;
-  }
-}
 
-function mouseReleased(){
-  selected = { quad: -1, vert: -1 };
-}
+    function mouseDragged() {
+      if (selected.quad != -1) {
+        let v = quads[selected.quad][selected.vert];
+        v.x = mouseX - width / 2;
+        v.y = mouseY - height / 2;
+      }
+    }
+
+    function mouseReleased() {
+      selected = { quad: -1, vert: -1 };
+    }
 
     function windowResized() {
       resizeCanvas(windowWidth, windowHeight);
