@@ -1,13 +1,33 @@
-// --- HYDRA ---
+// --- MODO EDICIÓN / PRESENTACIÓN ---
 
-let uiVisible = true;
+let uiVisible = false; // Arranca en modo presentación
 
-document.addEventListener('keydown', (e) => {
-  if (e.ctrlKey && e.shiftKey && e.key === 'H') {
-    uiVisible = !uiVisible;
-    document.getElementById('ui').style.display = uiVisible ? 'block' : 'none';
+function toggleEditMode() {
+  uiVisible = !uiVisible;
+
+  const panel = document.getElementById('ui');
+  const btn   = document.getElementById('toggle-btn');
+
+  if (uiVisible) {
+    panel.classList.add('visible');
+    btn.classList.remove('presentation');
+  } else {
+    panel.classList.remove('visible');
+    btn.classList.add('presentation');
   }
+}
+
+// Mantener compatibilidad con CTRL+SHIFT+H
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.shiftKey && e.key === 'H') toggleEditMode();
 });
+
+// Aplicar clase presentation al iniciar (modo presentación por defecto)
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('toggle-btn').classList.add('presentation');
+});
+
+// --- HYDRA ---
 
 var hydra = new Hydra({ canvas: document.getElementById("myCanvas") });
 
@@ -56,12 +76,15 @@ function draw() {
 
   textureMode(NORMAL);
   texture(hc);
-
-  if (!uiVisible) noStroke();
-  else stroke(255);
+  noStroke(); // base: sin contorno
 
   for (let q = 0; q < quads.length; q++) {
     let v = quads[q];
+
+    // En modo edición: contorno blanco
+    if (uiVisible) stroke(255);
+    else noStroke();
+
     beginShape();
     vertex(v[0].x, v[0].y, 0, 0);
     vertex(v[1].x, v[1].y, 1, 0);
@@ -70,12 +93,14 @@ function draw() {
     endShape(CLOSE);
   }
 
+  // Puntos de vértices — solo en modo edición
   if (uiVisible) {
     push();
     resetMatrix();
     translate(-width / 2, -height / 2);
     fill(255, 0, 0);
     noStroke();
+
     for (let q = 0; q < quads.length; q++) {
       let v = quads[q];
       for (let i = 0; i < v.length; i++) {
@@ -93,18 +118,24 @@ function setQuadCount(n) {
   quads = [];
   let spacing = 500;
   let totalWidth = (n - 1) * spacing;
+
   for (let i = 0; i < n; i++) {
     let xOffset = i * spacing - totalWidth / 2;
     quads.push([
       createVector(-200 + xOffset, -200),
       createVector(200 + xOffset, -200),
-      createVector(200 + xOffset, 200),
-      createVector(-200 + xOffset, 200)
+      createVector(200 + xOffset,  200),
+      createVector(-200 + xOffset,  200)
     ]);
   }
 }
 
+// --- INTERACCIÓN ---
+// Los vértices solo son arrastrables en modo edición
+
 function mousePressed() {
+  if (!uiVisible) return; // bloquear en modo presentación
+
   for (let q = 0; q < quads.length; q++) {
     let v = quads[q];
     for (let i = 0; i < v.length; i++) {
@@ -119,6 +150,7 @@ function mousePressed() {
 }
 
 function mouseDragged() {
+  if (!uiVisible) return;
   if (selected.quad != -1) {
     let v = quads[selected.quad][selected.vert];
     v.x = mouseX - width / 2;
