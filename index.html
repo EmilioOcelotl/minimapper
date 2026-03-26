@@ -19,19 +19,19 @@
   </div>
 
   <!-- Botón de información (solo visible en modo edición) -->
-<div id="info-btn" onclick="toggleInfoPanel()" title="Instrucciones">
-  <span id="info-icon">?</span>
-</div>
+  <div id="info-btn" onclick="toggleInfoPanel()" title="Instrucciones">
+    <span id="info-icon">?</span>
+  </div>
 
-<!-- Panel de instrucciones -->
-<div id="info-panel">
-  <button class="close-info" onclick="toggleInfoPanel()">×</button>
-  <h3>Instrucciones</h3>
-  <p><strong>Hydra:</strong> Puedes cambiar el código y hacer click en RUN para ver los cambios</p>
-  <p><strong>Mapping:</strong> Cambia la cantidad de quads y arrastra los vértices rojos para mapear la imagen</p>
-  <p><strong>Atajos:</strong> CTRL + SHIFT + H para mostrar/ocultar la UI</p>
-  <p><strong>Auto-guardado:</strong> Tu código y configuración de vértices se guardan automáticamente</p>
-</div>
+  <!-- Panel de instrucciones -->
+  <div id="info-panel">
+    <button class="close-info" onclick="toggleInfoPanel()">×</button>
+    <h3>Instrucciones</h3>
+    <p><strong>Hydra:</strong> Puedes cambiar el código y hacer click en RUN para ver los cambios</p>
+    <p><strong>Mapping:</strong> Cambia la cantidad de quads y arrastra los vértices rojos para mapear la imagen</p>
+    <p><strong>Atajos:</strong> CTRL + SHIFT + H para mostrar/ocultar la UI</p>
+    <p><strong>Auto-guardado:</strong> Tu código y configuración de vértices se guardan automáticamente</p>
+  </div>
 
   <div id="ui">
     <textarea id="code" maxlength="1000">
@@ -39,12 +39,12 @@
     </textarea>
     <br>
     <button onclick="runHydra()">RUN</button>
-    <label>Quads:</label>
-    <select id="quadCount" onchange="setQuadCount(this.value)">
-      <option value="1">1</option>
-      <option value="2">2</option>
-      <option value="3">3</option>
-    </select>
+    <button onclick="stopHydra()">STOP</button>
+    <div style="margin-top:10px;">
+      <button onclick="addQuad()">+ Quad</button>
+    </div>
+
+    <div id="quad-list"></div>
   </div>
 
   <!-- Canvas de Hydra (oculto) -->
