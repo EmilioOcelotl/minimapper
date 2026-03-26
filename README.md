@@ -22,7 +22,7 @@ RUN: ejecutar código Hydra
 
 Quads: cambiar número de superficies
 
-CTRL + SHIFT + H: mostrar / ocultar interfaz
+CTRL + SHIFT + H o CLIC en lengueta: mostrar / ocultar interfaz
 
 ## Créditos
 

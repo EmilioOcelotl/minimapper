@@ -18,15 +18,24 @@
     <span id="toggle-icon">✦</span>
   </div>
 
+  <!-- Botón de información (solo visible en modo edición) -->
+<div id="info-btn" onclick="toggleInfoPanel()" title="Instrucciones">
+  <span id="info-icon">?</span>
+</div>
+
+<!-- Panel de instrucciones -->
+<div id="info-panel">
+  <button class="close-info" onclick="toggleInfoPanel()">×</button>
+  <h3>Instrucciones</h3>
+  <p><strong>Hydra:</strong> Puedes cambiar el código y hacer click en RUN para ver los cambios</p>
+  <p><strong>Mapping:</strong> Cambia la cantidad de quads y arrastra los vértices rojos para mapear la imagen</p>
+  <p><strong>Atajos:</strong> CTRL + SHIFT + H para mostrar/ocultar la UI</p>
+  <p><strong>Auto-guardado:</strong> Tu código y configuración de vértices se guardan automáticamente</p>
+</div>
+
   <div id="ui">
     <textarea id="code" maxlength="1000">
-// ejemplo Hydra
-// Puedes cambiar el código y hacer click en RUN para ver los cambios
-// También puedes cambiar la cantidad de quads y arrastrar los vértices para mapear la imagen
-// Atajos de teclado: CTRL + SHIFT + H para mostrar/ocultar la UI
-
-osc(1,1,1)
-  .out()
+// MINIMAPPER - Hydra + Mapping
     </textarea>
     <br>
     <button onclick="runHydra()">RUN</button>

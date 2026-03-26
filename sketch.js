@@ -6,15 +6,29 @@ function toggleEditMode() {
   uiVisible = !uiVisible;
 
   const panel = document.getElementById('ui');
-  const btn   = document.getElementById('toggle-btn');
+  const btn = document.getElementById('toggle-btn');
+  const infoBtn = document.getElementById('info-btn');
 
   if (uiVisible) {
     panel.classList.add('visible');
     btn.classList.remove('presentation');
+    infoBtn.classList.add('visible');
   } else {
     panel.classList.remove('visible');
     btn.classList.add('presentation');
+    // Cerrar panel de información si está abierto al salir del modo edición
+    const infoPanel = document.getElementById('info-panel');
+    if (infoPanel.classList.contains('visible')) {
+      infoPanel.classList.remove('visible');
+    }
+    infoBtn.classList.remove('visible');
   }
+}
+
+// Función para toggle del panel de instrucciones
+function toggleInfoPanel() {
+  const infoPanel = document.getElementById('info-panel');
+  infoPanel.classList.toggle('visible');
 }
 
 // Mantener compatibilidad con CTRL+SHIFT+H
@@ -25,6 +39,8 @@ document.addEventListener('keydown', (e) => {
 // Aplicar clase presentation al iniciar (modo presentación por defecto)
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('toggle-btn').classList.add('presentation');
+  // El botón info comienza oculto
+  document.getElementById('info-btn').classList.remove('visible');
   loadFromLocalStorage(); // Cargar configuración guardada al iniciar
 });
 
