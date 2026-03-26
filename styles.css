@@ -57,7 +57,6 @@ body {
   font-family: monospace;
   font-size: 13px;
   transform: translateX(-100%);
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
 }
 
@@ -210,4 +209,23 @@ select {
 
 #info-panel .close-info:hover {
   color: white;
+}
+
+#hint {
+  position: fixed;
+  top: 18px;
+  left: 48px;
+  color: white;
+  font-family: monospace;
+  font-size: 13px;
+  opacity: 0;
+  pointer-events: none;
+  animation: breathe 2s infinite ease-in-out;
+  z-index: 9999;
+}
+
+@keyframes breathe {
+  0% { opacity: 0.2; }
+  50% { opacity: 1; }
+  100% { opacity: 0.2; }
 }

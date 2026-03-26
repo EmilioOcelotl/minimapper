@@ -1,10 +1,15 @@
 // --- MODO EDICIÓN / PRESENTACIÓN ---
 
 let uiVisible = false; // Arranca en modo presentación
+let showHint = true;
+
 
 function toggleEditMode() {
   uiVisible = !uiVisible;
-
+  if (showHint) {
+    showHint = false; // 🔥 solo vive en esta sesión
+    document.getElementById("hint").style.display = "none";
+  }
   const panel = document.getElementById('ui');
   const btn = document.getElementById('toggle-btn');
   const infoBtn = document.getElementById('info-btn');
@@ -89,8 +94,7 @@ function saveToLocalStorage() {
     const config = {
       hydraCode: document.getElementById("code").value,
       quadVertices: quads.map(quad =>
-        quad.map(v => ({ x: v.x, y: v.y }))
-      )
+        quad.points.map(p => ({ x: p.x, y: p.y })))
     };
 
     localStorage.setItem("minimapper_config", JSON.stringify(config));
@@ -115,9 +119,9 @@ function loadFromLocalStorage() {
 
     // Restaurar número de quads y vértices
     if (config.quadVertices) {
-      quads = config.quadVertices.map(q =>
-        q.map(v => createVector(v.x, v.y))
-      );
+      quads = config.quadVertices.map(q => ({
+        points: q.map(v => createVector(v.x, v.y))
+      }));
     }
     renderQuadList();
 
@@ -134,13 +138,14 @@ let quads = [];
 let selected = { quad: -1, vert: -1 };
 
 function setup() {
-  createCanvas(windowWidth, windowHeight, WEBGL);
+  let cnv = createCanvas(windowWidth, windowHeight, WEBGL);
+  cnv.style('position', 'fixed');
+  cnv.style('top', '0');
+  cnv.style('left', '0');
+  cnv.style('z-index', '0');
   hc = select("#myCanvas");
   hc.hide();
-  // Solo crear quads por defecto si no hay configuración guardada
-  if (quads.length === 0) {
-    addQuad();
-  }
+
 }
 
 function draw() {
@@ -151,18 +156,39 @@ function draw() {
   noStroke(); // base: sin contorno
 
   for (let q = 0; q < quads.length; q++) {
-    let v = quads[q];
+    let quad = quads[q];
+    let pts = quad.points;
 
-    // En modo edición: contorno blanco
-    if (uiVisible) stroke(255);
-    else noStroke();
+    let cols = 3;
 
-    beginShape();
-    vertex(v[0].x, v[0].y, 0, 0);
-    vertex(v[1].x, v[1].y, 1, 0);
-    vertex(v[2].x, v[2].y, 1, 1);
-    vertex(v[3].x, v[3].y, 0, 1);
-    endShape(CLOSE);
+    texture(hc);
+
+    for (let y = 0; y < 2; y++) {
+      for (let x = 0; x < 2; x++) {
+
+        let i = x + y * cols;
+
+        let p0 = pts[i];
+        let p1 = pts[i + 1];
+        let p2 = pts[i + cols + 1];
+        let p3 = pts[i + cols];
+
+        let u0 = x / 2;
+        let v0 = y / 2;
+        let u1 = (x + 1) / 2;
+        let v1 = (y + 1) / 2;
+
+        if (uiVisible) stroke(255);
+        else noStroke();
+
+        beginShape();
+        vertex(p0.x, p0.y, u0, v0);
+        vertex(p1.x, p1.y, u1, v0);
+        vertex(p2.x, p2.y, u1, v1);
+        vertex(p3.x, p3.y, u0, v1);
+        endShape(CLOSE);
+      }
+    }
   }
 
   // Puntos de vértices — solo en modo edición
@@ -174,13 +200,32 @@ function draw() {
     noStroke();
 
     for (let q = 0; q < quads.length; q++) {
-      let v = quads[q];
-      for (let i = 0; i < v.length; i++) {
-        let sx = v[i].x + width / 2;
-        let sy = v[i].y + height / 2;
-        ellipse(sx, sy, 12, 12);
+      let pts = quads[q].points;
+      for (let i = 0; i < pts.length; i++) {
+        let sx = pts[i].x + width / 2;
+        let sy = pts[i].y + height / 2;
+        ellipse(sx, sy, 10, 10);
       }
     }
+    pop();
+  }
+
+  if (uiVisible) {
+    push();
+
+    // Volver a coordenadas 2D de pantalla
+    resetMatrix();
+    translate(-width / 2, -height / 2);
+
+    stroke(255, 255, 255, 120); // blanco semitransparente
+    strokeWeight(1);
+
+    // Línea horizontal
+    line(0, mouseY, width, mouseY);
+
+    // Línea vertical
+    line(mouseX, 0, mouseX, height);
+
     pop();
   }
 }
@@ -189,14 +234,21 @@ function addQuad() {
   let size = 200;
   let offset = quads.length * 220;
 
-  let quad = [
-    createVector(-size + offset, -size),
-    createVector(size + offset, -size),
-    createVector(size + offset, size),
-    createVector(-size + offset, size)
-  ];
+  let points = [];
 
-  quads.push(quad);
+  let cols = 3;
+  let rows = 3;
+
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      let px = map(x, 0, cols - 1, -size, size) + offset;
+      let py = map(y, 0, rows - 1, -size, size);
+
+      points.push(createVector(px, py));
+    }
+  }
+
+  quads.push({ points });
   renderQuadList();
   saveToLocalStorage();
 }
@@ -238,14 +290,16 @@ function stopHydra() {
 // Los vértices solo son arrastrables en modo edición
 
 function mousePressed() {
-  if (!uiVisible) return; // bloquear en modo presentación
+  if (!uiVisible) return;
 
   for (let q = 0; q < quads.length; q++) {
-    let v = quads[q];
-    for (let i = 0; i < v.length; i++) {
-      let sx = v[i].x + width / 2;
-      let sy = v[i].y + height / 2;
-      if (dist(mouseX, mouseY, sx, sy) < 12) {
+    let pts = quads[q].points;
+
+    for (let i = 0; i < pts.length; i++) {
+      let sx = pts[i].x + width / 2;
+      let sy = pts[i].y + height / 2;
+
+      if (dist(mouseX, mouseY, sx, sy) < 10) {
         selected = { quad: q, vert: i };
         return;
       }
@@ -255,10 +309,11 @@ function mousePressed() {
 
 function mouseDragged() {
   if (!uiVisible) return;
+
   if (selected.quad != -1) {
-    let v = quads[selected.quad][selected.vert];
-    v.x = mouseX - width / 2;
-    v.y = mouseY - height / 2;
+    let pt = quads[selected.quad].points[selected.vert];
+    pt.x = mouseX - width / 2;
+    pt.y = mouseY - height / 2;
   }
 }
 
