@@ -93,6 +93,15 @@ button:hover {
   background: rgba(255, 255, 255, 0.22);
 }
 
+button.active {
+  background: rgba(255, 255, 255, 0.28);
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+body.drawing-mode canvas {
+  cursor: crosshair;
+}
+
 label {
   margin-left: 12px;
 }

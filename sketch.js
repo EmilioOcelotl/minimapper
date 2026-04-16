@@ -4,6 +4,7 @@ let uiVisible = false;
 let showHint = true;
 
 function toggleEditMode() {
+  if (drawingMode) cancelDrawing();
   uiVisible = !uiVisible;
   if (showHint) {
     showHint = false;
@@ -35,7 +36,7 @@ function toggleInfoPanel() {
 
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'H') toggleEditMode();
-  if (e.key === 'Escape') stopHydra();
+  if (e.key === 'Escape') { if (drawingMode) cancelDrawing(); else stopHydra(); }
 });
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -178,6 +179,52 @@ function buildTessCache(quad) {
 let hc;
 let quads = [];
 let selected = { quad: -1, vert: -1 };
+let drawingMode = false;
+let drawStart = null;
+let drawCurrent = null;
+
+function startDrawingQuad() {
+  drawingMode = true;
+  document.body.classList.add('drawing-mode');
+  document.getElementById('add-quad-btn').classList.add('active');
+}
+
+function cancelDrawing() {
+  drawingMode = false;
+  drawStart = null;
+  drawCurrent = null;
+  document.body.classList.remove('drawing-mode');
+  const btn = document.getElementById('add-quad-btn');
+  if (btn) btn.classList.remove('active');
+}
+
+function finalizeQuad() {
+  if (!drawStart || !drawCurrent) { cancelDrawing(); return; }
+
+  const x0 = min(drawStart.x, drawCurrent.x) - width / 2;
+  const x2 = max(drawStart.x, drawCurrent.x) - width / 2;
+  const y0 = min(drawStart.y, drawCurrent.y) - height / 2;
+  const y2 = max(drawStart.y, drawCurrent.y) - height / 2;
+
+  if (abs(x2 - x0) < 10 || abs(y2 - y0) < 10) { cancelDrawing(); return; }
+
+  let points = [];
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      points.push(createVector(
+        map(col, 0, 2, x0, x2),
+        map(row, 0, 2, y0, y2)
+      ));
+    }
+  }
+
+  const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null };
+  buildTessCache(newQuad);
+  quads.push(newQuad);
+  renderQuadList();
+  saveToLocalStorage();
+  cancelDrawing();
+}
 
 function setup() {
   let cnv = createCanvas(windowWidth, windowHeight, WEBGL);
@@ -257,6 +304,18 @@ function draw() {
     strokeWeight(1);
     line(0, mouseY, width, mouseY);
     line(mouseX, 0, mouseX, height);
+
+    if (drawingMode && drawStart && drawCurrent) {
+      noFill();
+      stroke(255, 255, 255, 200);
+      strokeWeight(1);
+      rect(
+        min(drawStart.x, drawCurrent.x),
+        min(drawStart.y, drawCurrent.y),
+        abs(drawCurrent.x - drawStart.x),
+        abs(drawCurrent.y - drawStart.y)
+      );
+    }
 
     pop();
   }
@@ -374,6 +433,12 @@ function renderQuadList() {
 function mousePressed() {
   if (!uiVisible) return;
 
+  if (drawingMode) {
+    drawStart = { x: mouseX, y: mouseY };
+    drawCurrent = { x: mouseX, y: mouseY };
+    return;
+  }
+
   for (let q = 0; q < quads.length; q++) {
     let pts = quads[q].points;
     for (let i = 0; i < pts.length; i++) {
@@ -389,6 +454,12 @@ function mousePressed() {
 
 function mouseDragged() {
   if (!uiVisible) return;
+
+  if (drawingMode) {
+    if (drawStart) drawCurrent = { x: mouseX, y: mouseY };
+    return;
+  }
+
   if (selected.quad != -1) {
     let pt = quads[selected.quad].points[selected.vert];
     pt.x = mouseX - width / 2;
@@ -398,6 +469,10 @@ function mouseDragged() {
 }
 
 function mouseReleased() {
+  if (drawingMode) {
+    finalizeQuad();
+    return;
+  }
   if (selected.quad != -1) saveToLocalStorage();
   selected = { quad: -1, vert: -1 };
 }
