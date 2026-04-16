@@ -61,19 +61,25 @@ const BLOCKED = [
   '__proto__', 'prototype', 'constructor'
 ];
 
-function runHydra() {
-  let code = document.getElementById("code").value;
+function evalHydra(code) {
   const found = BLOCKED.find(word => code.includes(word));
-  if (found) {
-    alert(`"${found}" no está permitido`);
-    return;
-  }
+  if (found) return found;
   try {
     eval(code);
-    saveToLocalStorage();
   } catch (e) {
     console.log(e);
   }
+  return null;
+}
+
+function runHydra() {
+  const code = document.getElementById("code").value;
+  const blocked = evalHydra(code);
+  if (blocked) {
+    alert(`"${blocked}" no está permitido`);
+    return;
+  }
+  saveToLocalStorage();
 }
 
 function stopHydra() {
@@ -109,7 +115,7 @@ function loadFromLocalStorage() {
 
     if (config.hydraCode) {
       document.getElementById("code").value = config.hydraCode;
-      eval(config.hydraCode);
+      evalHydra(config.hydraCode);
     }
 
     if (config.quadVertices) {
@@ -119,7 +125,8 @@ function loadFromLocalStorage() {
         const quad = {
           points: pointsData.map(v => createVector(v.x, v.y)),
           sourceType: 'hydra', // video/image files don't survive page reload
-          sourceEl: null
+          sourceEl: null,
+          sourceUrl: null
         };
         buildTessCache(quad);
         return quad;
@@ -235,8 +242,14 @@ function draw() {
       for (let i = 0; i < pts.length; i++) {
         let sx = pts[i].x + width / 2;
         let sy = pts[i].y + height / 2;
-        fill(CORNERS.has(i) ? color(255, 0, 0) : color(255, 200, 0));
-        ellipse(sx, sy, 10, 10);
+        const isSelected = selected.quad === q && selected.vert === i;
+        if (isSelected) {
+          fill(255);
+          ellipse(sx, sy, 16, 16);
+        } else {
+          fill(CORNERS.has(i) ? color(255, 0, 0) : color(255, 200, 0));
+          ellipse(sx, sy, 10, 10);
+        }
       }
     }
 
@@ -251,19 +264,20 @@ function draw() {
 
 function addQuad() {
   let size = 200;
-  let offset = quads.length * 220;
+  let ox = random(-60, 60);
+  let oy = random(-60, 60);
   let points = [];
 
   for (let y = 0; y < 3; y++) {
     for (let x = 0; x < 3; x++) {
       points.push(createVector(
-        map(x, 0, 2, -size, size) + offset,
-        map(y, 0, 2, -size, size)
+        map(x, 0, 2, -size, size) + ox,
+        map(y, 0, 2, -size, size) + oy
       ));
     }
   }
 
-  const newQuad = { points, sourceType: 'hydra', sourceEl: null };
+  const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null };
   buildTessCache(newQuad);
   quads.push(newQuad);
   renderQuadList();
@@ -272,10 +286,11 @@ function addQuad() {
 
 function clearQuadSource(index) {
   const quad = quads[index];
-  if (!quad.sourceEl) return;
-  const el = quad.sourceType === 'video' ? quad.sourceEl.elt : null;
-  if (el && el.src) URL.revokeObjectURL(el.src);
-  if (quad.sourceType === 'video') quad.sourceEl.remove();
+  if (quad.sourceUrl) {
+    URL.revokeObjectURL(quad.sourceUrl);
+    quad.sourceUrl = null;
+  }
+  if (quad.sourceType === 'video' && quad.sourceEl) quad.sourceEl.remove();
   // p5.Image has no DOM element to remove; GC handles it
 }
 
@@ -306,9 +321,10 @@ function loadQuadSource(index) {
     const file = e.target.files[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
+    clearQuadSource(index);
+    quads[index].sourceUrl = url;
 
     if (type === 'video') {
-      clearQuadSource(index);
       let vid = createVideo(url);
       vid.hide();
       vid.loop();
