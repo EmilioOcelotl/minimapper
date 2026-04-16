@@ -34,10 +34,7 @@ function toggleInfoPanel() {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.ctrlKey && e.shiftKey && e.key === 'H') toggleEditMode();
-});
-
-document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'H') toggleEditMode();
   if (e.key === 'Escape') stopHydra();
 });
 
@@ -119,11 +116,13 @@ function loadFromLocalStorage() {
       quads = config.quadVertices.map(q => {
         // backward compat: old format stored array of points directly
         const pointsData = Array.isArray(q) ? q : q.points;
-        return {
+        const quad = {
           points: pointsData.map(v => createVector(v.x, v.y)),
           sourceType: 'hydra', // video/image files don't survive page reload
           sourceEl: null
         };
+        buildTessCache(quad);
+        return quad;
       });
     }
     renderQuadList();
@@ -138,6 +137,7 @@ function loadFromLocalStorage() {
 // Corners are on the surface; edge/center points act as attractors.
 
 const TESS = 8;
+const CORNERS = new Set([0, 2, 6, 8]);
 
 function evalPatch(pts, u, v) {
   let u1 = 1 - u, v1 = 1 - v;
@@ -152,6 +152,18 @@ function evalPatch(pts, u, v) {
     }
   }
   return { x, y };
+}
+
+function buildTessCache(quad) {
+  const pts = quad.points;
+  const cache = new Array(TESS + 1);
+  for (let j = 0; j <= TESS; j++) {
+    cache[j] = new Array(TESS + 1);
+    for (let i = 0; i <= TESS; i++) {
+      cache[j][i] = evalPatch(pts, i / TESS, j / TESS);
+    }
+  }
+  quad.tessCache = cache;
 }
 
 // --- P5 ---
@@ -187,58 +199,52 @@ function draw() {
       texture(hc);
     }
 
-    if (uiVisible) stroke(255);
+    if (uiVisible) stroke(255, 255, 255, 18);
     else noStroke();
 
+    const cache = quad.tessCache;
+    beginShape(TRIANGLES);
     for (let j = 0; j < TESS; j++) {
       for (let i = 0; i < TESS; i++) {
-        let u0 = i / TESS,     u1 = (i+1) / TESS;
-        let v0 = j / TESS,     v1 = (j+1) / TESS;
+        const u0 = i / TESS,       u1 = (i + 1) / TESS;
+        const v0 = j / TESS,       v1 = (j + 1) / TESS;
+        const p00 = cache[j][i],   p10 = cache[j][i + 1];
+        const p11 = cache[j+1][i+1], p01 = cache[j+1][i];
 
-        let p00 = evalPatch(pts, u0, v0);
-        let p10 = evalPatch(pts, u1, v0);
-        let p11 = evalPatch(pts, u1, v1);
-        let p01 = evalPatch(pts, u0, v1);
-
-        beginShape();
         vertex(p00.x, p00.y, u0, v0);
         vertex(p10.x, p10.y, u1, v0);
         vertex(p11.x, p11.y, u1, v1);
+
+        vertex(p00.x, p00.y, u0, v0);
+        vertex(p11.x, p11.y, u1, v1);
         vertex(p01.x, p01.y, u0, v1);
-        endShape(CLOSE);
       }
     }
+    endShape();
   }
 
-  // Control points — edit mode only
+  // Control points + crosshair — edit mode only
   if (uiVisible) {
     push();
     resetMatrix();
     translate(-width / 2, -height / 2);
-    noStroke();
 
+    noStroke();
     for (let q = 0; q < quads.length; q++) {
       let pts = quads[q].points;
       for (let i = 0; i < pts.length; i++) {
         let sx = pts[i].x + width / 2;
         let sy = pts[i].y + height / 2;
-        // Corners (indices 0,2,6,8) are on the surface — red; others are control attractors — yellow
-        fill([0,2,6,8].includes(i) ? color(255, 0, 0) : color(255, 200, 0));
+        fill(CORNERS.has(i) ? color(255, 0, 0) : color(255, 200, 0));
         ellipse(sx, sy, 10, 10);
       }
     }
-    pop();
-  }
 
-  // Crosshair — edit mode only
-  if (uiVisible) {
-    push();
-    resetMatrix();
-    translate(-width / 2, -height / 2);
     stroke(255, 255, 255, 120);
     strokeWeight(1);
     line(0, mouseY, width, mouseY);
     line(mouseX, 0, mouseX, height);
+
     pop();
   }
 }
@@ -257,15 +263,24 @@ function addQuad() {
     }
   }
 
-  quads.push({ points, sourceType: 'hydra', sourceEl: null });
+  const newQuad = { points, sourceType: 'hydra', sourceEl: null };
+  buildTessCache(newQuad);
+  quads.push(newQuad);
   renderQuadList();
   saveToLocalStorage();
 }
 
+function clearQuadSource(index) {
+  const quad = quads[index];
+  if (!quad.sourceEl) return;
+  const el = quad.sourceType === 'video' ? quad.sourceEl.elt : null;
+  if (el && el.src) URL.revokeObjectURL(el.src);
+  if (quad.sourceType === 'video') quad.sourceEl.remove();
+  // p5.Image has no DOM element to remove; GC handles it
+}
+
 function deleteQuad(index) {
-  if (quads[index].sourceType === 'video' && quads[index].sourceEl) {
-    quads[index].sourceEl.remove();
-  }
+  clearQuadSource(index);
   quads.splice(index, 1);
   renderQuadList();
   saveToLocalStorage();
@@ -273,9 +288,7 @@ function deleteQuad(index) {
 
 function changeQuadSource(index, type) {
   if (quads[index].sourceType === type) return;
-  if (quads[index].sourceType === 'video' && quads[index].sourceEl) {
-    quads[index].sourceEl.remove();
-  }
+  clearQuadSource(index);
   quads[index].sourceType = type;
   quads[index].sourceEl = null;
   renderQuadList();
@@ -295,7 +308,7 @@ function loadQuadSource(index) {
     const url = URL.createObjectURL(file);
 
     if (type === 'video') {
-      if (quads[index].sourceEl) quads[index].sourceEl.remove();
+      clearQuadSource(index);
       let vid = createVideo(url);
       vid.hide();
       vid.loop();
@@ -364,6 +377,7 @@ function mouseDragged() {
     let pt = quads[selected.quad].points[selected.vert];
     pt.x = mouseX - width / 2;
     pt.y = mouseY - height / 2;
+    buildTessCache(quads[selected.quad]);
   }
 }
 
