@@ -1,3 +1,5 @@
+![Minimapper](/assets/img/minimapperBanner.png)
+
 # MiniMapper
 
 MiniMapper es una herramienta experimental para explorar videomapping generativo en tiempo real usando Hydra y p5.js.
