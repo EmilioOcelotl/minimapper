@@ -24,14 +24,14 @@ Las fuentes de video e imagen no persisten al recargar la página y deben volver
 
 ## Interacción
 
+- **+ Quad:** activa el modo dibujo — el cursor cambia a crosshair. Clic y arrastra en el canvas para definir el área del quad; soltar lo crea. ESC cancela.
 - **Puntos rojos (esquinas):** están sobre la superficie — arrástralos para reposicionar el quad
-- **Puntos amarillos (intermedios):** atraen la superficie hacia ellos curvando los bordes
-- **+ Quad:** agregar nuevas superficies
+- **Puntos amarillos (intermedios):** atraen la superficie hacia ellos curvando los bordes. El punto activo se muestra en blanco mientras se arrastra.
 - **✕** (en cada quad): eliminar superficie
 - **RUN:** ejecutar código Hydra
 - **STOP:** detener salida visual
 - **CTRL + SHIFT + H** o clic en ✦: mostrar / ocultar interfaz
-- **ESC:** silenciar
+- **ESC:** silenciar o cancelar modo dibujo
 
 ## Créditos
 
