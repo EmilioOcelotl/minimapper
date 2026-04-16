@@ -1,31 +1,39 @@
 # MiniMapper
 
-MiniMapper es una herramienta experimental para explorar videomapping generativo usando Hydra y p5.js.
+MiniMapper es una herramienta experimental para explorar videomapping generativo en tiempo real usando Hydra y p5.js.
 
-Permite generar visuales en tiempo real y proyectarlos sobre superficies deformables mediante el movimiento de vértices.
+Permite generar visuales y proyectarlos sobre superficies deformables (quads) con bordes curvos, manipulando directamente sus puntos de control en el espacio.
 
 ## Uso básico
 
-Escribe o modifica el código de Hydra en el panel de texto
+- Haz clic en ✦ para activar el modo edición
+- Haz clic en + Quad para crear una superficie
+- Escribe o modifica el código de Hydra en el editor
+- Haz clic en RUN para ejecutar
+- Usa STOP para silenciar (hush())
 
-Haz clic en RUN para ejecutar
+## Fuentes de textura
 
-Selecciona la cantidad de superficies (quads)
+Cada quad puede usar una fuente distinta, seleccionable con el menú junto a su nombre:
 
-Arrastra los puntos rojos para ajustar la proyección
+- **Hydra:** usa el canvas de Hydra (por defecto)
+- **Video:** carga un archivo de video local con el botón "Cargar"
+- **Imagen:** carga una imagen local con el botón "Cargar"
 
-## Controles
+Las fuentes de video e imagen no persisten al recargar la página y deben volver a cargarse.
 
-Mouse: mover vértices
+## Interacción
 
-RUN: ejecutar código Hydra
-
-Quads: cambiar número de superficies
-
-CTRL + SHIFT + H o CLIC en lengueta: mostrar / ocultar interfaz
+- **Puntos rojos (esquinas):** están sobre la superficie — arrástralos para reposicionar el quad
+- **Puntos amarillos (intermedios):** atraen la superficie hacia ellos curvando los bordes
+- **+ Quad:** agregar nuevas superficies
+- **✕** (en cada quad): eliminar superficie
+- **RUN:** ejecutar código Hydra
+- **STOP:** detener salida visual
+- **CTRL + SHIFT + H** o clic en ✦: mostrar / ocultar interfaz
+- **ESC:** silenciar
 
 ## Créditos
 
-[Hydra](https://hydra.ojack.xyz/) — Olivia Jack
-
-[p5.js](https://p5js.org/) — Processing Foundation
+- [Hydra](https://hydra.ojack.xyz/) — Olivia Jack
+- [p5.js](https://p5js.org/) — Processing Foundation

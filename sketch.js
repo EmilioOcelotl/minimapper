@@ -1,13 +1,12 @@
 // --- MODO EDICIÓN / PRESENTACIÓN ---
 
-let uiVisible = false; // Arranca en modo presentación
+let uiVisible = false;
 let showHint = true;
-
 
 function toggleEditMode() {
   uiVisible = !uiVisible;
   if (showHint) {
-    showHint = false; // 🔥 solo vive en esta sesión
+    showHint = false;
     document.getElementById("hint").style.display = "none";
   }
   const panel = document.getElementById('ui');
@@ -21,7 +20,6 @@ function toggleEditMode() {
   } else {
     panel.classList.remove('visible');
     btn.classList.add('presentation');
-    // Cerrar panel de información si está abierto al salir del modo edición
     const infoPanel = document.getElementById('info-panel');
     if (infoPanel.classList.contains('visible')) {
       infoPanel.classList.remove('visible');
@@ -30,34 +28,30 @@ function toggleEditMode() {
   }
 }
 
-// Función para toggle del panel de instrucciones
 function toggleInfoPanel() {
   const infoPanel = document.getElementById('info-panel');
   infoPanel.classList.toggle('visible');
 }
 
-// Mantener compatibilidad con CTRL+SHIFT+H
 document.addEventListener('keydown', (e) => {
-  if (e.ctrlKey && e.shiftEq && e.key === 'H') toggleEditMode();
+  if (e.ctrlKey && e.shiftKey && e.key === 'H') toggleEditMode();
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    stopHydra();
-  }
+  if (e.key === 'Escape') stopHydra();
 });
 
-// Aplicar clase presentation al iniciar (modo presentación por defecto)
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('toggle-btn').classList.add('presentation');
-  // El botón info comienza oculto
   document.getElementById('info-btn').classList.remove('visible');
-  loadFromLocalStorage(); // Cargar configuración guardada al iniciar
+  loadFromLocalStorage();
 });
 
 // --- HYDRA ---
 
 var hydra = new Hydra({ canvas: document.getElementById("myCanvas") });
+// p5 overwrites window.noise at DOMContentLoaded; capture Hydra's version first
+var _hydraNoise = window.noise;
 
 osc(1, 1, 1).out();
 
@@ -72,18 +66,24 @@ const BLOCKED = [
 
 function runHydra() {
   let code = document.getElementById("code").value;
-
   const found = BLOCKED.find(word => code.includes(word));
   if (found) {
     alert(`"${found}" no está permitido`);
     return;
   }
-
   try {
     eval(code);
-    saveToLocalStorage(); // Guardar después de ejecutar código
+    saveToLocalStorage();
   } catch (e) {
     console.log(e);
+  }
+}
+
+function stopHydra() {
+  try {
+    hush();
+  } catch (e) {
+    console.log("Error al ejecutar hush:", e);
   }
 }
 
@@ -93,10 +93,11 @@ function saveToLocalStorage() {
   try {
     const config = {
       hydraCode: document.getElementById("code").value,
-      quadVertices: quads.map(quad =>
-        quad.points.map(p => ({ x: p.x, y: p.y })))
+      quadVertices: quads.map(quad => ({
+        points: quad.points.map(p => ({ x: p.x, y: p.y })),
+        sourceType: quad.sourceType
+      }))
     };
-
     localStorage.setItem("minimapper_config", JSON.stringify(config));
   } catch (e) {
     console.error(e);
@@ -107,28 +108,50 @@ function loadFromLocalStorage() {
   try {
     const saved = localStorage.getItem("minimapper_config");
     if (!saved) return;
-
     const config = JSON.parse(saved);
 
-    // Restaurar código Hydra
     if (config.hydraCode) {
       document.getElementById("code").value = config.hydraCode;
-      // Ejecutar el código restaurado
       eval(config.hydraCode);
     }
 
-    // Restaurar número de quads y vértices
     if (config.quadVertices) {
-      quads = config.quadVertices.map(q => ({
-        points: q.map(v => createVector(v.x, v.y))
-      }));
+      quads = config.quadVertices.map(q => {
+        // backward compat: old format stored array of points directly
+        const pointsData = Array.isArray(q) ? q : q.points;
+        return {
+          points: pointsData.map(v => createVector(v.x, v.y)),
+          sourceType: 'hydra', // video/image files don't survive page reload
+          sourceEl: null
+        };
+      });
     }
     renderQuadList();
-
     console.log("Configuración cargada");
   } catch (e) {
     console.error("Error al cargar configuración:", e);
   }
+}
+
+// --- BEZIER PATCH ---
+// Each quad is a 3×3 grid of control points (quadratic tensor-product Bezier surface).
+// Corners are on the surface; edge/center points act as attractors.
+
+const TESS = 8;
+
+function evalPatch(pts, u, v) {
+  let u1 = 1 - u, v1 = 1 - v;
+  let bu = [u1*u1, 2*u*u1, u*u];
+  let bv = [v1*v1, 2*v*v1, v*v];
+  let x = 0, y = 0;
+  for (let j = 0; j < 3; j++) {
+    for (let i = 0; i < 3; i++) {
+      let w = bu[i] * bv[j];
+      x += w * pts[j*3+i].x;
+      y += w * pts[j*3+i].y;
+    }
+  }
+  return { x, y };
 }
 
 // --- P5 ---
@@ -145,58 +168,53 @@ function setup() {
   cnv.style('z-index', '0');
   hc = select("#myCanvas");
   hc.hide();
-
+  window.noise = _hydraNoise; // restore after p5 overwrote it
 }
 
 function draw() {
   background(0);
-
   textureMode(NORMAL);
-  texture(hc);
-  noStroke(); // base: sin contorno
 
   for (let q = 0; q < quads.length; q++) {
     let quad = quads[q];
     let pts = quad.points;
 
-    let cols = 3;
+    if (quad.sourceType === 'video' && quad.sourceEl) {
+      texture(quad.sourceEl);
+    } else if (quad.sourceType === 'image' && quad.sourceEl) {
+      texture(quad.sourceEl);
+    } else {
+      texture(hc);
+    }
 
-    texture(hc);
+    if (uiVisible) stroke(255);
+    else noStroke();
 
-    for (let y = 0; y < 2; y++) {
-      for (let x = 0; x < 2; x++) {
+    for (let j = 0; j < TESS; j++) {
+      for (let i = 0; i < TESS; i++) {
+        let u0 = i / TESS,     u1 = (i+1) / TESS;
+        let v0 = j / TESS,     v1 = (j+1) / TESS;
 
-        let i = x + y * cols;
-
-        let p0 = pts[i];
-        let p1 = pts[i + 1];
-        let p2 = pts[i + cols + 1];
-        let p3 = pts[i + cols];
-
-        let u0 = x / 2;
-        let v0 = y / 2;
-        let u1 = (x + 1) / 2;
-        let v1 = (y + 1) / 2;
-
-        if (uiVisible) stroke(255);
-        else noStroke();
+        let p00 = evalPatch(pts, u0, v0);
+        let p10 = evalPatch(pts, u1, v0);
+        let p11 = evalPatch(pts, u1, v1);
+        let p01 = evalPatch(pts, u0, v1);
 
         beginShape();
-        vertex(p0.x, p0.y, u0, v0);
-        vertex(p1.x, p1.y, u1, v0);
-        vertex(p2.x, p2.y, u1, v1);
-        vertex(p3.x, p3.y, u0, v1);
+        vertex(p00.x, p00.y, u0, v0);
+        vertex(p10.x, p10.y, u1, v0);
+        vertex(p11.x, p11.y, u1, v1);
+        vertex(p01.x, p01.y, u0, v1);
         endShape(CLOSE);
       }
     }
   }
 
-  // Puntos de vértices — solo en modo edición
+  // Control points — edit mode only
   if (uiVisible) {
     push();
     resetMatrix();
     translate(-width / 2, -height / 2);
-    fill(255, 0, 0);
     noStroke();
 
     for (let q = 0; q < quads.length; q++) {
@@ -204,28 +222,23 @@ function draw() {
       for (let i = 0; i < pts.length; i++) {
         let sx = pts[i].x + width / 2;
         let sy = pts[i].y + height / 2;
+        // Corners (indices 0,2,6,8) are on the surface — red; others are control attractors — yellow
+        fill([0,2,6,8].includes(i) ? color(255, 0, 0) : color(255, 200, 0));
         ellipse(sx, sy, 10, 10);
       }
     }
     pop();
   }
 
+  // Crosshair — edit mode only
   if (uiVisible) {
     push();
-
-    // Volver a coordenadas 2D de pantalla
     resetMatrix();
     translate(-width / 2, -height / 2);
-
-    stroke(255, 255, 255, 120); // blanco semitransparente
+    stroke(255, 255, 255, 120);
     strokeWeight(1);
-
-    // Línea horizontal
     line(0, mouseY, width, mouseY);
-
-    // Línea vertical
     line(mouseX, 0, mouseX, height);
-
     pop();
   }
 }
@@ -233,72 +246,110 @@ function draw() {
 function addQuad() {
   let size = 200;
   let offset = quads.length * 220;
-
   let points = [];
 
-  let cols = 3;
-  let rows = 3;
-
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      let px = map(x, 0, cols - 1, -size, size) + offset;
-      let py = map(y, 0, rows - 1, -size, size);
-
-      points.push(createVector(px, py));
+  for (let y = 0; y < 3; y++) {
+    for (let x = 0; x < 3; x++) {
+      points.push(createVector(
+        map(x, 0, 2, -size, size) + offset,
+        map(y, 0, 2, -size, size)
+      ));
     }
   }
 
-  quads.push({ points });
+  quads.push({ points, sourceType: 'hydra', sourceEl: null });
   renderQuadList();
   saveToLocalStorage();
 }
 
 function deleteQuad(index) {
+  if (quads[index].sourceType === 'video' && quads[index].sourceEl) {
+    quads[index].sourceEl.remove();
+  }
   quads.splice(index, 1);
   renderQuadList();
   saveToLocalStorage();
 }
 
+function changeQuadSource(index, type) {
+  if (quads[index].sourceType === type) return;
+  if (quads[index].sourceType === 'video' && quads[index].sourceEl) {
+    quads[index].sourceEl.remove();
+  }
+  quads[index].sourceType = type;
+  quads[index].sourceEl = null;
+  renderQuadList();
+}
+
+function loadQuadSource(index) {
+  const type = quads[index].sourceType;
+  if (type === 'hydra') return;
+
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = type === 'video' ? 'video/*' : 'image/*';
+
+  input.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+
+    if (type === 'video') {
+      if (quads[index].sourceEl) quads[index].sourceEl.remove();
+      let vid = createVideo(url);
+      vid.hide();
+      vid.loop();
+      vid.volume(0);
+      vid.play();
+      quads[index].sourceEl = vid;
+    } else {
+      loadImage(url, (img) => {
+        quads[index].sourceEl = img;
+      });
+    }
+  };
+
+  input.click();
+}
+
 function renderQuadList() {
   const container = document.getElementById("quad-list");
   if (!container) return;
-
   container.innerHTML = "";
 
   quads.forEach((q, i) => {
     const div = document.createElement("div");
     div.style.marginTop = "6px";
 
+    const loadBtn = q.sourceType !== 'hydra'
+      ? `<button onclick="loadQuadSource(${i})">Cargar</button>`
+      : '';
+
     div.innerHTML = `
       Quad ${i}
-      <button onclick="deleteQuad(${i})">x</button>
+      <select onchange="changeQuadSource(${i}, this.value)">
+        <option value="hydra"  ${q.sourceType === 'hydra'  ? 'selected' : ''}>Hydra</option>
+        <option value="video"  ${q.sourceType === 'video'  ? 'selected' : ''}>Video</option>
+        <option value="image"  ${q.sourceType === 'image'  ? 'selected' : ''}>Imagen</option>
+      </select>
+      ${loadBtn}
+      <button onclick="deleteQuad(${i})">✕</button>
     `;
 
     container.appendChild(div);
   });
 }
 
-function stopHydra() {
-  try {
-    hush();
-  } catch (e) {
-    console.log("Error al ejecutar hush:", e);
-  }
-}
-
 // --- INTERACCIÓN ---
-// Los vértices solo son arrastrables en modo edición
 
 function mousePressed() {
   if (!uiVisible) return;
 
   for (let q = 0; q < quads.length; q++) {
     let pts = quads[q].points;
-
     for (let i = 0; i < pts.length; i++) {
       let sx = pts[i].x + width / 2;
       let sy = pts[i].y + height / 2;
-
       if (dist(mouseX, mouseY, sx, sy) < 10) {
         selected = { quad: q, vert: i };
         return;
@@ -309,7 +360,6 @@ function mousePressed() {
 
 function mouseDragged() {
   if (!uiVisible) return;
-
   if (selected.quad != -1) {
     let pt = quads[selected.quad].points[selected.vert];
     pt.x = mouseX - width / 2;
@@ -318,9 +368,7 @@ function mouseDragged() {
 }
 
 function mouseReleased() {
-  if (selected.quad != -1) {
-    saveToLocalStorage(); // Guardar después de soltar un vértice arrastrado
-  }
+  if (selected.quad != -1) saveToLocalStorage();
   selected = { quad: -1, vert: -1 };
 }
 
