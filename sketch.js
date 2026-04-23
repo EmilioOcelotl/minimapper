@@ -37,6 +37,10 @@ function toggleInfoPanel() {
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'H') toggleEditMode();
   if (e.key === 'Escape') { if (drawingMode) cancelDrawing(); else stopHydra(); }
+  if (e.ctrlKey && e.key === 'z' && document.activeElement !== document.getElementById('code')) {
+    e.preventDefault();
+    undo();
+  }
 });
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -265,6 +269,27 @@ function buildTessCache(quad) {
   quad.tessCache = cache;
 }
 
+// --- UNDO ---
+
+const undoStack = [];
+const UNDO_LIMIT = 20;
+
+function pushUndo() {
+  undoStack.push(quads.map(q => q.points.map(p => ({ x: p.x, y: p.y }))));
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+}
+
+function undo() {
+  if (undoStack.length === 0) return;
+  const snapshot = undoStack.pop();
+  snapshot.forEach((pts, qi) => {
+    if (!quads[qi]) return;
+    quads[qi].points = pts.map(p => createVector(p.x, p.y));
+    buildTessCache(quads[qi]);
+  });
+  saveToLocalStorage();
+}
+
 // --- P5 ---
 
 let hc;
@@ -312,6 +337,7 @@ function finalizeQuad() {
   const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null };
   buildTessCache(newQuad);
   quads.push(newQuad);
+  undoStack.length = 0;
   renderQuadList();
   saveToLocalStorage();
   cancelDrawing();
@@ -454,6 +480,7 @@ function clearQuadSource(index) {
 function deleteQuad(index) {
   clearQuadSource(index);
   quads.splice(index, 1);
+  undoStack.length = 0;
   renderQuadList();
   saveToLocalStorage();
 }
@@ -577,6 +604,7 @@ function mousePressed() {
       let sx = pts[i].x + width / 2;
       let sy = pts[i].y + height / 2;
       if (dist(mouseX, mouseY, sx, sy) < 10) {
+        pushUndo();
         selected = { quad: q, vert: i };
         return;
       }
