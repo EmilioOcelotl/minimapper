@@ -30,6 +30,13 @@ function toggleEditMode() {
   }
 }
 
+function togglePanelCollapse() {
+  const ui = document.getElementById('ui');
+  const btn = document.getElementById('panel-collapse');
+  ui.classList.toggle('collapsed');
+  btn.textContent = ui.classList.contains('collapsed') ? '›' : '‹';
+}
+
 function toggleInfoPanel() {
   const infoPanel = document.getElementById('info-panel');
   infoPanel.classList.toggle('visible');
@@ -82,19 +89,32 @@ function evalHydra(code) {
   return null;
 }
 
+function setRunStatus(ok, msg) {
+  const el = document.getElementById("run-status");
+  if (!el) return;
+  el.textContent = msg || (ok ? "✓" : "✗");
+  el.className = ok ? "status-ok" : "status-error";
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.textContent = ""; el.className = ""; }, 3000);
+}
+
 function runHydra() {
   const code = document.getElementById("code").value;
   const blocked = evalHydra(code);
   if (blocked) {
-    alert(`"${blocked}" no está permitido`);
+    setRunStatus(false, `✗ bloqueado`);
+    console.warn(`Hydra: "${blocked}" no está permitido`);
     return;
   }
+  setRunStatus(true);
   saveToLocalStorage();
 }
 
 function stopHydra() {
   try {
     hush();
+    const el = document.getElementById("run-status");
+    if (el) { el.textContent = ""; el.className = ""; }
   } catch (e) {
     console.log("Error al ejecutar hush:", e);
   }
@@ -170,12 +190,13 @@ function applySession(session) {
   let pending = 0;
 
   session.quads.forEach((qData, i) => {
+    const srcType = qData.sourceType === 'camera' ? 'camera' : 'hydra';
     let quad;
     if (qData.kind === 'freeform') {
       quad = {
         kind: 'freeform',
         vertices: qData.vertices.map(v => createVector(v.x, v.y)),
-        sourceType: 'hydra',
+        sourceType: srcType,
         sourceEl: null,
         sourceUrl: null
       };
@@ -184,7 +205,7 @@ function applySession(session) {
       quad = {
         kind: 'quad',
         points: pointsData.map(v => createVector(v.x, v.y)),
-        sourceType: 'hydra',
+        sourceType: srcType,
         sourceEl: null,
         sourceUrl: null
       };
@@ -203,6 +224,7 @@ function applySession(session) {
     }
   });
 
+  quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
   if (pending === 0) { renderQuadList(); saveToLocalStorage(); }
 }
 
@@ -237,11 +259,12 @@ function loadFromLocalStorage() {
 
     if (config.quadVertices) {
       quads = config.quadVertices.map(q => {
+        const srcType = q.sourceType === 'camera' ? 'camera' : 'hydra';
         if (q.kind === 'freeform') {
           return {
             kind: 'freeform',
             vertices: q.vertices.map(v => createVector(v.x, v.y)),
-            sourceType: 'hydra',
+            sourceType: srcType,
             sourceEl: null,
             sourceUrl: null
           };
@@ -251,7 +274,7 @@ function loadFromLocalStorage() {
         const quad = {
           kind: 'quad',
           points: pointsData.map(v => createVector(v.x, v.y)),
-          sourceType: 'hydra',
+          sourceType: srcType,
           sourceEl: null,
           sourceUrl: null
         };
@@ -260,6 +283,7 @@ function loadFromLocalStorage() {
       });
     }
     renderQuadList();
+    quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
     console.log("Configuración cargada");
   } catch (e) {
     console.error("Error al cargar configuración:", e);
@@ -678,22 +702,24 @@ function renderQuadList() {
 
   quads.forEach((q, i) => {
     const div = document.createElement("div");
-    div.style.marginTop = "6px";
+    div.className = 'quad-item';
 
     const loadBtn = (q.sourceType === 'video' || q.sourceType === 'image')
       ? `<button onclick="loadQuadSource(${i})">Cargar</button>`
       : '';
 
     div.innerHTML = `
-      ${q.kind === 'freeform' ? 'Libre' : 'Quad'} ${i}
-      <select onchange="changeQuadSource(${i}, this.value)">
-        <option value="hydra"  ${q.sourceType === 'hydra'  ? 'selected' : ''}>Hydra</option>
-        <option value="video"  ${q.sourceType === 'video'  ? 'selected' : ''}>Video</option>
-        <option value="image"  ${q.sourceType === 'image'  ? 'selected' : ''}>Imagen</option>
-        <option value="camera" ${q.sourceType === 'camera' ? 'selected' : ''}>Cámara</option>
-      </select>
-      ${loadBtn}
-      <button onclick="deleteQuad(${i})">✕</button>
+      <span class="quad-label">${q.kind === 'freeform' ? 'Libre' : 'Quad'} ${i}</span>
+      <div class="quad-controls">
+        <select onchange="changeQuadSource(${i}, this.value)">
+          <option value="hydra"  ${q.sourceType === 'hydra'  ? 'selected' : ''}>Hydra</option>
+          <option value="video"  ${q.sourceType === 'video'  ? 'selected' : ''}>Video</option>
+          <option value="image"  ${q.sourceType === 'image'  ? 'selected' : ''}>Imagen</option>
+          <option value="camera" ${q.sourceType === 'camera' ? 'selected' : ''}>Cámara</option>
+        </select>
+        ${loadBtn}
+        <button onclick="deleteQuad(${i})">✕</button>
+      </div>
     `;
 
     container.appendChild(div);

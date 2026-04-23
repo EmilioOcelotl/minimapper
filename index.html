@@ -41,23 +41,37 @@
   </div>
 
   <div id="ui">
-    <textarea id="code">
+  <button id="panel-collapse" onclick="togglePanelCollapse()" title="Colapsar panel">‹</button>
+
+    <div class="panel-section">
+      <div class="section-label">superficies</div>
+      <div class="section-actions">
+        <button id="add-quad-btn" onclick="startDrawingQuad()">+ Quad</button>
+        <button id="add-freeform-btn" onclick="startDrawingFreeform()">+ Libre</button>
+      </div>
+      <div id="quad-list"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="section-label">hydra</div>
+      <textarea id="code">
 // MINIMAPPER - Hydra + Mapping
-// Clic en + Quad para agregar un nuevo plano 
+// Clic en + Quad para agregar un nuevo plano
 
 osc(1, 1, 1).out();
-    </textarea>
-    <br>
-    <button onclick="runHydra()">RUN</button>
-    <button onclick="stopHydra()">STOP</button>
-    <div style="margin-top:10px;">
-      <button id="add-quad-btn" onclick="startDrawingQuad()">+ Quad</button>
-      <button id="add-freeform-btn" onclick="startDrawingFreeform()">+ Libre</button>
+      </textarea>
+      <div class="hydra-actions">
+        <button onclick="runHydra()">RUN</button>
+        <button onclick="stopHydra()">STOP</button>
+        <span id="run-status"></span>
+      </div>
+    </div>
+
+    <div class="panel-section session-section">
       <button onclick="saveSession()" title="Guardar sesión como archivo JSON">↓ Sesión</button>
       <button onclick="loadSession()" title="Cargar sesión desde archivo JSON">↑ Sesión</button>
     </div>
 
-    <div id="quad-list"></div>
   </div>
 
   <!-- Canvas de Hydra (oculto) -->
