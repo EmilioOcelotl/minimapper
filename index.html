@@ -35,6 +35,7 @@
     <p><strong>Mapping:</strong> Arrastra los puntos de control para deformar la superficie. Las esquinas (rojo) están sobre la superficie; los puntos intermedios (amarillo) curvan los bordes</p>
     <p><strong>Atajos:</strong> CTRL + SHIFT + H para mostrar/ocultar la UI · ESC para silenciar o cancelar</p>
     <p><strong>Auto-guardado:</strong> El código y los vértices se guardan automáticamente (las fuentes de video/imagen se deben recargar al abrir)</p>
+    <p><strong>Sesión:</strong> "↓ Sesión" descarga un archivo JSON con el estado completo (imágenes incluidas). "↑ Sesión" lo restaura — los videos y la cámara se deben recargar manualmente</p>
   </div>
 
   <div id="ui">
@@ -49,6 +50,8 @@ osc(1, 1, 1).out();
     <button onclick="stopHydra()">STOP</button>
     <div style="margin-top:10px;">
       <button id="add-quad-btn" onclick="startDrawingQuad()">+ Quad</button>
+      <button onclick="saveSession()" title="Guardar sesión como archivo JSON">↓ Sesión</button>
+      <button onclick="loadSession()" title="Cargar sesión desde archivo JSON">↑ Sesión</button>
     </div>
 
     <div id="quad-list"></div>

@@ -91,6 +91,97 @@ function stopHydra() {
   }
 }
 
+// --- SESIÓN ---
+
+function saveSession() {
+  const session = {
+    version: 1,
+    hydraCode: document.getElementById("code").value,
+    quads: quads.map(q => {
+      const data = {
+        points: q.points.map(p => ({ x: p.x, y: p.y })),
+        sourceType: q.sourceType
+      };
+      if (q.sourceType === 'image' && q.sourceEl && q.sourceEl.canvas) {
+        try {
+          data.imageData = q.sourceEl.canvas.toDataURL('image/png');
+        } catch (e) {
+          data.sourceType = 'hydra';
+        }
+      }
+      return data;
+    })
+  };
+  const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `minimapper_${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function loadSession() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        applySession(JSON.parse(ev.target.result));
+      } catch (err) {
+        alert("Archivo de sesión inválido.");
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+function applySession(session) {
+  quads.forEach((_, i) => clearQuadSource(i));
+  quads = [];
+
+  if (session.hydraCode) {
+    document.getElementById("code").value = session.hydraCode;
+    evalHydra(session.hydraCode);
+  }
+
+  if (!session.quads || session.quads.length === 0) {
+    renderQuadList();
+    saveToLocalStorage();
+    return;
+  }
+
+  let pending = 0;
+
+  session.quads.forEach((qData, i) => {
+    const quad = {
+      points: qData.points.map(v => createVector(v.x, v.y)),
+      sourceType: 'hydra',
+      sourceEl: null,
+      sourceUrl: null
+    };
+    buildTessCache(quad);
+    quads.push(quad);
+
+    if (qData.sourceType === 'image' && qData.imageData) {
+      pending++;
+      loadImage(qData.imageData, (img) => {
+        quads[i].sourceType = 'image';
+        quads[i].sourceEl = img;
+        pending--;
+        if (pending === 0) { renderQuadList(); saveToLocalStorage(); }
+      });
+    }
+  });
+
+  if (pending === 0) { renderQuadList(); saveToLocalStorage(); }
+}
+
 // --- LOCAL STORAGE ---
 
 function saveToLocalStorage() {
