@@ -5,6 +5,7 @@ let showHint = true;
 
 function toggleEditMode() {
   if (drawingMode) cancelDrawing();
+  if (freeformMode) cancelFreeform();
   uiVisible = !uiVisible;
   if (showHint) {
     showHint = false;
@@ -36,7 +37,11 @@ function toggleInfoPanel() {
 
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'H') toggleEditMode();
-  if (e.key === 'Escape') { if (drawingMode) cancelDrawing(); else stopHydra(); }
+  if (e.key === 'Escape') {
+    if (freeformMode) cancelFreeform();
+    else if (drawingMode) cancelDrawing();
+    else stopHydra();
+  }
   if (e.ctrlKey && e.key === 'z' && document.activeElement !== document.getElementById('code')) {
     e.preventDefault();
     undo();
@@ -102,18 +107,20 @@ function saveSession() {
     version: 1,
     hydraCode: document.getElementById("code").value,
     quads: quads.map(q => {
-      const data = {
-        points: q.points.map(p => ({ x: p.x, y: p.y })),
-        sourceType: q.sourceType
-      };
+      let imageData = null;
       if (q.sourceType === 'image' && q.sourceEl && q.sourceEl.canvas) {
-        try {
-          data.imageData = q.sourceEl.canvas.toDataURL('image/png');
-        } catch (e) {
-          data.sourceType = 'hydra';
-        }
+        try { imageData = q.sourceEl.canvas.toDataURL('image/png'); } catch (e) {}
       }
-      return data;
+      const sourceType = imageData ? q.sourceType : (q.sourceType === 'image' ? 'hydra' : q.sourceType);
+      if (q.kind === 'freeform') {
+        const data = { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType };
+        if (imageData) data.imageData = imageData;
+        return data;
+      } else {
+        const data = { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType };
+        if (imageData) data.imageData = imageData;
+        return data;
+      }
     })
   };
   const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
@@ -163,13 +170,26 @@ function applySession(session) {
   let pending = 0;
 
   session.quads.forEach((qData, i) => {
-    const quad = {
-      points: qData.points.map(v => createVector(v.x, v.y)),
-      sourceType: 'hydra',
-      sourceEl: null,
-      sourceUrl: null
-    };
-    buildTessCache(quad);
+    let quad;
+    if (qData.kind === 'freeform') {
+      quad = {
+        kind: 'freeform',
+        vertices: qData.vertices.map(v => createVector(v.x, v.y)),
+        sourceType: 'hydra',
+        sourceEl: null,
+        sourceUrl: null
+      };
+    } else {
+      const pointsData = qData.points || qData;
+      quad = {
+        kind: 'quad',
+        points: pointsData.map(v => createVector(v.x, v.y)),
+        sourceType: 'hydra',
+        sourceEl: null,
+        sourceUrl: null
+      };
+      buildTessCache(quad);
+    }
     quads.push(quad);
 
     if (qData.sourceType === 'image' && qData.imageData) {
@@ -192,10 +212,11 @@ function saveToLocalStorage() {
   try {
     const config = {
       hydraCode: document.getElementById("code").value,
-      quadVertices: quads.map(quad => ({
-        points: quad.points.map(p => ({ x: p.x, y: p.y })),
-        sourceType: quad.sourceType
-      }))
+      quadVertices: quads.map(q =>
+        q.kind === 'freeform'
+          ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType }
+          : { kind: 'quad',     points:   q.points.map(p => ({ x: p.x, y: p.y })),   sourceType: q.sourceType }
+      )
     };
     localStorage.setItem("minimapper_config", JSON.stringify(config));
   } catch (e) {
@@ -216,11 +237,21 @@ function loadFromLocalStorage() {
 
     if (config.quadVertices) {
       quads = config.quadVertices.map(q => {
+        if (q.kind === 'freeform') {
+          return {
+            kind: 'freeform',
+            vertices: q.vertices.map(v => createVector(v.x, v.y)),
+            sourceType: 'hydra',
+            sourceEl: null,
+            sourceUrl: null
+          };
+        }
         // backward compat: old format stored array of points directly
         const pointsData = Array.isArray(q) ? q : q.points;
         const quad = {
+          kind: 'quad',
           points: pointsData.map(v => createVector(v.x, v.y)),
-          sourceType: 'hydra', // video/image files don't survive page reload
+          sourceType: 'hydra',
           sourceEl: null,
           sourceUrl: null
         };
@@ -275,17 +306,25 @@ const undoStack = [];
 const UNDO_LIMIT = 20;
 
 function pushUndo() {
-  undoStack.push(quads.map(q => q.points.map(p => ({ x: p.x, y: p.y }))));
+  undoStack.push(quads.map(q =>
+    q.kind === 'freeform'
+      ? { kind: 'freeform', data: q.vertices.map(v => ({ x: v.x, y: v.y })) }
+      : { kind: 'quad',     data: q.points.map(p => ({ x: p.x, y: p.y })) }
+  ));
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
 }
 
 function undo() {
   if (undoStack.length === 0) return;
   const snapshot = undoStack.pop();
-  snapshot.forEach((pts, qi) => {
+  snapshot.forEach((entry, qi) => {
     if (!quads[qi]) return;
-    quads[qi].points = pts.map(p => createVector(p.x, p.y));
-    buildTessCache(quads[qi]);
+    if (entry.kind === 'freeform') {
+      quads[qi].vertices = entry.data.map(v => createVector(v.x, v.y));
+    } else {
+      quads[qi].points = entry.data.map(p => createVector(p.x, p.y));
+      buildTessCache(quads[qi]);
+    }
   });
   saveToLocalStorage();
 }
@@ -298,11 +337,46 @@ let selected = { quad: -1, vert: -1 };
 let drawingMode = false;
 let drawStart = null;
 let drawCurrent = null;
+let freeformMode = false;
+let freeformVerts = [];
 
 function startDrawingQuad() {
+  if (freeformMode) cancelFreeform();
   drawingMode = true;
   document.body.classList.add('drawing-mode');
   document.getElementById('add-quad-btn').classList.add('active');
+}
+
+function startDrawingFreeform() {
+  if (drawingMode) cancelDrawing();
+  freeformMode = true;
+  freeformVerts = [];
+  document.body.classList.add('drawing-mode');
+  document.getElementById('add-freeform-btn').classList.add('active');
+}
+
+function cancelFreeform() {
+  freeformMode = false;
+  freeformVerts = [];
+  document.body.classList.remove('drawing-mode');
+  const btn = document.getElementById('add-freeform-btn');
+  if (btn) btn.classList.remove('active');
+}
+
+function finalizeFreeform() {
+  if (freeformVerts.length < 3) { cancelFreeform(); return; }
+  const shape = {
+    kind: 'freeform',
+    vertices: freeformVerts.map(v => createVector(v.x, v.y)),
+    sourceType: 'hydra',
+    sourceEl: null,
+    sourceUrl: null
+  };
+  quads.push(shape);
+  undoStack.length = 0;
+  renderQuadList();
+  saveToLocalStorage();
+  cancelFreeform();
 }
 
 function cancelDrawing() {
@@ -359,8 +433,7 @@ function draw() {
   textureMode(NORMAL);
 
   for (let q = 0; q < quads.length; q++) {
-    let quad = quads[q];
-    let pts = quad.points;
+    const quad = quads[q];
 
     if (quad.sourceEl && quad.sourceType !== 'hydra') {
       texture(quad.sourceEl);
@@ -371,25 +444,46 @@ function draw() {
     if (uiVisible) stroke(255, 255, 255, 18);
     else noStroke();
 
-    const cache = quad.tessCache;
-    beginShape(TRIANGLES);
-    for (let j = 0; j < TESS; j++) {
-      for (let i = 0; i < TESS; i++) {
-        const u0 = i / TESS,       u1 = (i + 1) / TESS;
-        const v0 = j / TESS,       v1 = (j + 1) / TESS;
-        const p00 = cache[j][i],   p10 = cache[j][i + 1];
-        const p11 = cache[j+1][i+1], p01 = cache[j+1][i];
-
-        vertex(p00.x, p00.y, u0, v0);
-        vertex(p10.x, p10.y, u1, v0);
-        vertex(p11.x, p11.y, u1, v1);
-
-        vertex(p00.x, p00.y, u0, v0);
-        vertex(p11.x, p11.y, u1, v1);
-        vertex(p01.x, p01.y, u0, v1);
+    if (quad.kind === 'freeform') {
+      const verts = quad.vertices;
+      const n = verts.length;
+      if (n < 3) continue;
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const v of verts) {
+        if (v.x < minX) minX = v.x; if (v.x > maxX) maxX = v.x;
+        if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
       }
+      const dX = maxX - minX || 1, dY = maxY - minY || 1;
+      let cx = 0, cy = 0;
+      for (const v of verts) { cx += v.x; cy += v.y; }
+      cx /= n; cy /= n;
+      beginShape(TRIANGLES);
+      for (let i = 0; i < n; i++) {
+        const a = verts[i], b = verts[(i + 1) % n];
+        vertex(cx, cy, (cx - minX) / dX, (cy - minY) / dY);
+        vertex(a.x, a.y, (a.x - minX) / dX, (a.y - minY) / dY);
+        vertex(b.x, b.y, (b.x - minX) / dX, (b.y - minY) / dY);
+      }
+      endShape();
+    } else {
+      const cache = quad.tessCache;
+      beginShape(TRIANGLES);
+      for (let j = 0; j < TESS; j++) {
+        for (let i = 0; i < TESS; i++) {
+          const u0 = i / TESS,         u1 = (i + 1) / TESS;
+          const v0 = j / TESS,         v1 = (j + 1) / TESS;
+          const p00 = cache[j][i],     p10 = cache[j][i + 1];
+          const p11 = cache[j+1][i+1], p01 = cache[j+1][i];
+          vertex(p00.x, p00.y, u0, v0);
+          vertex(p10.x, p10.y, u1, v0);
+          vertex(p11.x, p11.y, u1, v1);
+          vertex(p00.x, p00.y, u0, v0);
+          vertex(p11.x, p11.y, u1, v1);
+          vertex(p01.x, p01.y, u0, v1);
+        }
+      }
+      endShape();
     }
-    endShape();
   }
 
   // Control points + crosshair — edit mode only
@@ -400,16 +494,17 @@ function draw() {
 
     noStroke();
     for (let q = 0; q < quads.length; q++) {
-      let pts = quads[q].points;
+      const shape = quads[q];
+      const pts = shape.kind === 'freeform' ? shape.vertices : shape.points;
       for (let i = 0; i < pts.length; i++) {
-        let sx = pts[i].x + width / 2;
-        let sy = pts[i].y + height / 2;
+        const sx = pts[i].x + width / 2;
+        const sy = pts[i].y + height / 2;
         const isSelected = selected.quad === q && selected.vert === i;
         if (isSelected) {
           fill(255);
           ellipse(sx, sy, 16, 16);
         } else {
-          fill(CORNERS.has(i) ? color(255, 0, 0) : color(255, 200, 0));
+          fill(shape.kind === 'freeform' || CORNERS.has(i) ? color(255, 0, 0) : color(255, 200, 0));
           ellipse(sx, sy, 10, 10);
         }
       }
@@ -430,6 +525,24 @@ function draw() {
         abs(drawCurrent.x - drawStart.x),
         abs(drawCurrent.y - drawStart.y)
       );
+    }
+
+    if (freeformMode && freeformVerts.length > 0) {
+      stroke(255, 255, 255, 200);
+      strokeWeight(1);
+      noFill();
+      beginShape();
+      for (const v of freeformVerts) vertex(v.x + width / 2, v.y + height / 2);
+      vertex(mouseX, mouseY);
+      endShape();
+      noStroke();
+      for (let i = 0; i < freeformVerts.length; i++) {
+        const sx = freeformVerts[i].x + width / 2;
+        const sy = freeformVerts[i].y + height / 2;
+        const closeable = i === 0 && freeformVerts.length >= 3 && dist(mouseX, mouseY, sx, sy) < 15;
+        fill(closeable ? color(0, 220, 80) : color(255, 0, 0));
+        ellipse(sx, sy, closeable ? 14 : 10, closeable ? 14 : 10);
+      }
     }
 
     pop();
@@ -572,7 +685,7 @@ function renderQuadList() {
       : '';
 
     div.innerHTML = `
-      Quad ${i}
+      ${q.kind === 'freeform' ? 'Libre' : 'Quad'} ${i}
       <select onchange="changeQuadSource(${i}, this.value)">
         <option value="hydra"  ${q.sourceType === 'hydra'  ? 'selected' : ''}>Hydra</option>
         <option value="video"  ${q.sourceType === 'video'  ? 'selected' : ''}>Video</option>
@@ -592,6 +705,18 @@ function renderQuadList() {
 function mousePressed() {
   if (!uiVisible) return;
 
+  if (freeformMode) {
+    if (freeformVerts.length >= 3) {
+      const first = freeformVerts[0];
+      if (dist(mouseX, mouseY, first.x + width / 2, first.y + height / 2) < 15) {
+        finalizeFreeform();
+        return;
+      }
+    }
+    freeformVerts.push(createVector(mouseX - width / 2, mouseY - height / 2));
+    return;
+  }
+
   if (drawingMode) {
     drawStart = { x: mouseX, y: mouseY };
     drawCurrent = { x: mouseX, y: mouseY };
@@ -599,10 +724,11 @@ function mousePressed() {
   }
 
   for (let q = 0; q < quads.length; q++) {
-    let pts = quads[q].points;
+    const shape = quads[q];
+    const pts = shape.kind === 'freeform' ? shape.vertices : shape.points;
     for (let i = 0; i < pts.length; i++) {
-      let sx = pts[i].x + width / 2;
-      let sy = pts[i].y + height / 2;
+      const sx = pts[i].x + width / 2;
+      const sy = pts[i].y + height / 2;
       if (dist(mouseX, mouseY, sx, sy) < 10) {
         pushUndo();
         selected = { quad: q, vert: i };
@@ -621,10 +747,16 @@ function mouseDragged() {
   }
 
   if (selected.quad != -1) {
-    let pt = quads[selected.quad].points[selected.vert];
-    pt.x = mouseX - width / 2;
-    pt.y = mouseY - height / 2;
-    buildTessCache(quads[selected.quad]);
+    const shape = quads[selected.quad];
+    if (shape.kind === 'freeform') {
+      shape.vertices[selected.vert].x = mouseX - width / 2;
+      shape.vertices[selected.vert].y = mouseY - height / 2;
+    } else {
+      const pt = shape.points[selected.vert];
+      pt.x = mouseX - width / 2;
+      pt.y = mouseY - height / 2;
+      buildTessCache(shape);
+    }
   }
 }
 
@@ -635,6 +767,14 @@ function mouseReleased() {
   }
   if (selected.quad != -1) saveToLocalStorage();
   selected = { quad: -1, vert: -1 };
+}
+
+function doubleClicked() {
+  if (!uiVisible || !freeformMode) return;
+  if (freeformVerts.length >= 3) {
+    freeformVerts.pop(); // remove vertex added by second click of double-click
+    finalizeFreeform();
+  }
 }
 
 function windowResized() {

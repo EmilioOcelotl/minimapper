@@ -29,9 +29,11 @@
   <div id="info-panel">
     <button class="close-info" onclick="toggleInfoPanel()">×</button>
     <h3>Instrucciones</h3>
+    <p><em>MiniMapper funciona mejor en Chrome o Firefox.</em></p>
     <p><strong>Hydra:</strong> Escribe código en el editor y haz clic en RUN para ver los cambios</p>
     <p><strong>Fuente:</strong> Cada quad puede usar Hydra, Video o Imagen como textura — elige con el selector y carga el archivo con el botón "Cargar"</p>
     <p><strong>Quads:</strong> Clic en + Quad, luego dibuja el área en el canvas con clic y arrastre. ESC cancela</p>
+    <p><strong>Formas libres:</strong> Clic en + Libre, luego clic para colocar cada vértice. Cierra con doble clic en cualquier parte, o clic en el primer vértice (se vuelve verde). Mínimo 3 vértices. ESC cancela</p>
     <p><strong>Mapping:</strong> Arrastra los puntos de control para deformar la superficie. Las esquinas (rojo) están sobre la superficie; los puntos intermedios (amarillo) curvan los bordes</p>
     <p><strong>Atajos:</strong> CTRL + SHIFT + H para mostrar/ocultar la UI · ESC para silenciar o cancelar</p>
     <p><strong>Auto-guardado:</strong> El código y los vértices se guardan automáticamente (las fuentes de video/imagen se deben recargar al abrir)</p>
@@ -50,6 +52,7 @@ osc(1, 1, 1).out();
     <button onclick="stopHydra()">STOP</button>
     <div style="margin-top:10px;">
       <button id="add-quad-btn" onclick="startDrawingQuad()">+ Quad</button>
+      <button id="add-freeform-btn" onclick="startDrawingFreeform()">+ Libre</button>
       <button onclick="saveSession()" title="Guardar sesión como archivo JSON">↓ Sesión</button>
       <button onclick="loadSession()" title="Cargar sesión desde archivo JSON">↑ Sesión</button>
     </div>
