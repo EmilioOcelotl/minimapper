@@ -245,9 +245,7 @@ function draw() {
     let quad = quads[q];
     let pts = quad.points;
 
-    if (quad.sourceType === 'video' && quad.sourceEl) {
-      texture(quad.sourceEl);
-    } else if (quad.sourceType === 'image' && quad.sourceEl) {
+    if (quad.sourceEl && quad.sourceType !== 'hydra') {
       texture(quad.sourceEl);
     } else {
       texture(hc);
@@ -349,7 +347,16 @@ function clearQuadSource(index) {
     URL.revokeObjectURL(quad.sourceUrl);
     quad.sourceUrl = null;
   }
-  if (quad.sourceType === 'video' && quad.sourceEl) quad.sourceEl.remove();
+  if (quad.sourceType === 'camera' && quad.sourceEl) {
+    const vid = quad.sourceEl.elt;
+    if (vid && vid.srcObject) {
+      vid.srcObject.getTracks().forEach(t => t.stop());
+      vid.srcObject = null;
+    }
+    quad.sourceEl.remove();
+  } else if (quad.sourceType === 'video' && quad.sourceEl) {
+    quad.sourceEl.remove();
+  }
   // p5.Image has no DOM element to remove; GC handles it
 }
 
@@ -365,12 +372,45 @@ function changeQuadSource(index, type) {
   clearQuadSource(index);
   quads[index].sourceType = type;
   quads[index].sourceEl = null;
-  renderQuadList();
+  if (type === 'camera') {
+    startCamera(index);
+  } else {
+    renderQuadList();
+  }
+}
+
+function startCamera(index) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("Tu navegador no soporta acceso a cámara.");
+    quads[index].sourceType = 'hydra';
+    renderQuadList();
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({ video: true })
+    .then(stream => {
+      stream.getTracks().forEach(t => t.stop());
+      const cap = createCapture(VIDEO);
+      cap.hide();
+      quads[index].sourceEl = cap;
+      renderQuadList();
+    })
+    .catch(err => {
+      const msg = err.name === 'NotFoundError'
+        ? "No se encontró ninguna cámara conectada."
+        : err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError'
+        ? "Permiso de cámara denegado."
+        : err.name === 'NotReadableError'
+        ? "La cámara está en uso por otra aplicación."
+        : "No se pudo acceder a la cámara.";
+      alert(msg);
+      quads[index].sourceType = 'hydra';
+      renderQuadList();
+    });
 }
 
 function loadQuadSource(index) {
   const type = quads[index].sourceType;
-  if (type === 'hydra') return;
+  if (type === 'hydra' || type === 'camera') return;
 
   const input = document.createElement('input');
   input.type = 'file';
@@ -409,7 +449,7 @@ function renderQuadList() {
     const div = document.createElement("div");
     div.style.marginTop = "6px";
 
-    const loadBtn = q.sourceType !== 'hydra'
+    const loadBtn = (q.sourceType === 'video' || q.sourceType === 'image')
       ? `<button onclick="loadQuadSource(${i})">Cargar</button>`
       : '';
 
@@ -419,6 +459,7 @@ function renderQuadList() {
         <option value="hydra"  ${q.sourceType === 'hydra'  ? 'selected' : ''}>Hydra</option>
         <option value="video"  ${q.sourceType === 'video'  ? 'selected' : ''}>Video</option>
         <option value="image"  ${q.sourceType === 'image'  ? 'selected' : ''}>Imagen</option>
+        <option value="camera" ${q.sourceType === 'camera' ? 'selected' : ''}>Cámara</option>
       </select>
       ${loadBtn}
       <button onclick="deleteQuad(${i})">✕</button>
