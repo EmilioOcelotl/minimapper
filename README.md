@@ -1,4 +1,4 @@
-![Minimapper](/assets/img/minimapperBanner.png)
+![Minimapper](/assets/img/minimapperCaptura.png)
 
 # MiniMapper
 
