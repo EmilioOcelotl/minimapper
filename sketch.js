@@ -4,6 +4,7 @@ let uiVisible = false;
 let showHint = true;
 
 function toggleEditMode() {
+  if (isPlaying) stopPlayback();
   if (drawingMode) cancelDrawing();
   if (freeformMode) cancelFreeform();
   uiVisible = !uiVisible;
@@ -47,6 +48,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (freeformMode) cancelFreeform();
     else if (drawingMode) cancelDrawing();
+    else if (isPlaying) { stopPlayback(); if (!uiVisible) toggleEditMode(); }
     else stopHydra();
   }
   if (e.ctrlKey && e.key === 'z' && document.activeElement !== document.getElementById('code')) {
@@ -123,25 +125,30 @@ function stopHydra() {
 // --- SESIÓN ---
 
 function saveSession() {
+  snapshotCurrentScene();
   const session = {
-    version: 1,
-    hydraCode: document.getElementById("code").value,
-    quads: quads.map(q => {
-      let imageData = null;
-      if (q.sourceType === 'image' && q.sourceEl && q.sourceEl.canvas) {
-        try { imageData = q.sourceEl.canvas.toDataURL('image/png'); } catch (e) {}
-      }
-      const sourceType = imageData ? q.sourceType : (q.sourceType === 'image' ? 'hydra' : q.sourceType);
-      if (q.kind === 'freeform') {
-        const data = { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType };
-        if (imageData) data.imageData = imageData;
-        return data;
-      } else {
-        const data = { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType };
-        if (imageData) data.imageData = imageData;
-        return data;
-      }
-    })
+    version: 2,
+    scenes: scenes.map((s, si) => ({
+      id: s.id,
+      duration_s: s.duration_s,
+      hydraCode: s.hydraCode || '',
+      quads: si === currentSceneIndex
+        ? quads.map(q => {
+            let imageData = null;
+            if (q.sourceType === 'image' && q.sourceEl && q.sourceEl.canvas) {
+              try { imageData = q.sourceEl.canvas.toDataURL('image/png'); } catch (e) {}
+            }
+            const srcType = imageData ? q.sourceType : (q.sourceType === 'image' ? 'hydra' : q.sourceType);
+            const data = q.kind === 'freeform'
+              ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: srcType }
+              : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: srcType };
+            if (imageData) data.imageData = imageData;
+            return data;
+          })
+        : s.quads
+    })),
+    currentSceneIndex,
+    playbackMode
   };
   const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -173,72 +180,101 @@ function loadSession() {
 }
 
 function applySession(session) {
+  if (isPlaying) stopPlayback();
   quads.forEach((_, i) => clearQuadSource(i));
   quads = [];
 
-  if (session.hydraCode) {
-    document.getElementById("code").value = session.hydraCode;
-    evalHydra(session.hydraCode);
-  }
+  if (session.version === 2 && session.scenes && session.scenes.length > 0) {
+    scenes = session.scenes.map(s => ({
+      id: s.id,
+      duration_s: s.duration_s || 30,
+      hydraCode: s.hydraCode || '',
+      quads: s.quads || []
+    }));
+    currentSceneIndex = Math.min(session.currentSceneIndex || 0, scenes.length - 1);
+    playbackMode = session.playbackMode || 'once';
 
-  if (!session.quads || session.quads.length === 0) {
-    renderQuadList();
-    saveToLocalStorage();
-    return;
-  }
+    const sceneData = scenes[currentSceneIndex];
+    const code = sceneData.hydraCode || '';
+    document.getElementById('code').value = code;
+    if (code) evalHydra(code);
 
-  let pending = 0;
-
-  session.quads.forEach((qData, i) => {
-    const srcType = qData.sourceType === 'camera' ? 'camera' : 'hydra';
-    let quad;
-    if (qData.kind === 'freeform') {
-      quad = {
-        kind: 'freeform',
-        vertices: qData.vertices.map(v => createVector(v.x, v.y)),
-        sourceType: srcType,
-        sourceEl: null,
-        sourceUrl: null
-      };
-    } else {
-      const pointsData = qData.points || qData;
-      quad = {
-        kind: 'quad',
-        points: pointsData.map(v => createVector(v.x, v.y)),
-        sourceType: srcType,
-        sourceEl: null,
-        sourceUrl: null
-      };
-      buildTessCache(quad);
+    let pending = 0;
+    (sceneData.quads || []).forEach((qData, i) => {
+      const srcType = qData.sourceType === 'camera' ? 'camera' : (qData.sourceType || 'hydra');
+      let quad;
+      if (qData.kind === 'freeform') {
+        quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null };
+      } else {
+        const pts = qData.points || qData;
+        quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null };
+        buildTessCache(quad);
+      }
+      quads.push(quad);
+      if (qData.sourceType === 'image' && qData.imageData) {
+        pending++;
+        loadImage(qData.imageData, (img) => {
+          quads[i].sourceType = 'image';
+          quads[i].sourceEl = img;
+          pending--;
+          if (pending === 0) { renderQuadList(); saveToLocalStorage(); }
+        });
+      }
+    });
+    quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
+    undoStack.length = 0;
+    if (pending === 0) { renderQuadList(); saveToLocalStorage(); }
+    renderSceneStrip();
+  } else {
+    // Formato anterior (versión 1)
+    if (session.hydraCode) {
+      document.getElementById("code").value = session.hydraCode;
+      evalHydra(session.hydraCode);
     }
-    quads.push(quad);
+    scenes = [{ id: 1, duration_s: 30, hydraCode: session.hydraCode || '', quads: [] }];
+    currentSceneIndex = 0;
 
-    if (qData.sourceType === 'image' && qData.imageData) {
-      pending++;
-      loadImage(qData.imageData, (img) => {
-        quads[i].sourceType = 'image';
-        quads[i].sourceEl = img;
-        pending--;
-        if (pending === 0) { renderQuadList(); saveToLocalStorage(); }
-      });
+    if (!session.quads || session.quads.length === 0) {
+      renderQuadList(); saveToLocalStorage(); renderSceneStrip();
+      return;
     }
-  });
 
-  quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
-  if (pending === 0) { renderQuadList(); saveToLocalStorage(); }
+    let pending = 0;
+    session.quads.forEach((qData, i) => {
+      const srcType = qData.sourceType === 'camera' ? 'camera' : 'hydra';
+      let quad;
+      if (qData.kind === 'freeform') {
+        quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null };
+      } else {
+        const pointsData = qData.points || qData;
+        quad = { kind: 'quad', points: pointsData.map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null };
+        buildTessCache(quad);
+      }
+      quads.push(quad);
+      if (qData.sourceType === 'image' && qData.imageData) {
+        pending++;
+        loadImage(qData.imageData, (img) => {
+          quads[i].sourceType = 'image';
+          quads[i].sourceEl = img;
+          pending--;
+          if (pending === 0) { renderQuadList(); saveToLocalStorage(); renderSceneStrip(); }
+        });
+      }
+    });
+    quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
+    if (pending === 0) { renderQuadList(); saveToLocalStorage(); renderSceneStrip(); }
+  }
 }
 
 // --- LOCAL STORAGE ---
 
 function saveToLocalStorage() {
   try {
+    snapshotCurrentScene();
     const config = {
-      hydraCode: document.getElementById("code").value,
-      quadVertices: quads.map(q =>
-        q.kind === 'freeform'
-          ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType }
-          : { kind: 'quad',     points:   q.points.map(p => ({ x: p.x, y: p.y })),   sourceType: q.sourceType }
-      )
+      scenes: scenes.map(s => ({ id: s.id, duration_s: s.duration_s, hydraCode: s.hydraCode || '', quads: s.quads || [] })),
+      currentSceneIndex,
+      playbackMode
     };
     localStorage.setItem("minimapper_config", JSON.stringify(config));
   } catch (e) {
@@ -249,41 +285,33 @@ function saveToLocalStorage() {
 function loadFromLocalStorage() {
   try {
     const saved = localStorage.getItem("minimapper_config");
-    if (!saved) return;
+    if (!saved) { renderSceneStrip(); return; }
     const config = JSON.parse(saved);
 
-    if (config.hydraCode) {
-      document.getElementById("code").value = config.hydraCode;
-      evalHydra(config.hydraCode);
+    if (config.scenes && config.scenes.length > 0) {
+      scenes = config.scenes.map(s => ({
+        id: s.id,
+        duration_s: s.duration_s || 30,
+        hydraCode: s.hydraCode || '',
+        quads: s.quads || []
+      }));
+      currentSceneIndex = Math.min(config.currentSceneIndex || 0, scenes.length - 1);
+      playbackMode = config.playbackMode || 'once';
+    } else {
+      // Formato anterior: migrar a una escena
+      const hydraCode = config.hydraCode || '';
+      const rawQuads = config.quadVertices || [];
+      const quadsData = rawQuads.map(q => {
+        if (q.kind === 'freeform') return { kind: 'freeform', vertices: q.vertices || [], sourceType: q.sourceType || 'hydra' };
+        const pts = Array.isArray(q) ? q : (q.points || []);
+        return { kind: 'quad', points: pts, sourceType: q.sourceType || 'hydra' };
+      });
+      scenes = [{ id: 1, duration_s: 30, hydraCode, quads: quadsData }];
+      currentSceneIndex = 0;
     }
 
-    if (config.quadVertices) {
-      quads = config.quadVertices.map(q => {
-        const srcType = q.sourceType === 'camera' ? 'camera' : 'hydra';
-        if (q.kind === 'freeform') {
-          return {
-            kind: 'freeform',
-            vertices: q.vertices.map(v => createVector(v.x, v.y)),
-            sourceType: srcType,
-            sourceEl: null,
-            sourceUrl: null
-          };
-        }
-        // backward compat: old format stored array of points directly
-        const pointsData = Array.isArray(q) ? q : q.points;
-        const quad = {
-          kind: 'quad',
-          points: pointsData.map(v => createVector(v.x, v.y)),
-          sourceType: srcType,
-          sourceEl: null,
-          sourceUrl: null
-        };
-        buildTessCache(quad);
-        return quad;
-      });
-    }
-    renderQuadList();
-    quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
+    _applySceneData(scenes[currentSceneIndex]);
+    renderSceneStrip();
     console.log("Configuración cargada");
   } catch (e) {
     console.error("Error al cargar configuración:", e);
@@ -353,6 +381,16 @@ function undo() {
   saveToLocalStorage();
 }
 
+// --- ESCENAS ---
+
+let scenes = [{ id: 1, duration_s: 30, hydraCode: '', quads: [] }];
+let currentSceneIndex = 0;
+let playbackMode = 'once';
+let isPlaying = false;
+let playbackTimeout = null;
+let hudInterval = null;
+let sceneStartTime = 0;
+
 // --- P5 ---
 
 let hc;
@@ -400,6 +438,7 @@ function finalizeFreeform() {
   undoStack.length = 0;
   renderQuadList();
   saveToLocalStorage();
+  updateCurrentSceneThumbnail();
   cancelFreeform();
 }
 
@@ -438,6 +477,7 @@ function finalizeQuad() {
   undoStack.length = 0;
   renderQuadList();
   saveToLocalStorage();
+  updateCurrentSceneThumbnail();
   cancelDrawing();
 }
 
@@ -450,6 +490,7 @@ function setup() {
   hc = select("#myCanvas");
   hc.hide();
   window.noise = _hydraNoise; // restore after p5 overwrote it
+  renderSceneStrip(); // re-render thumbnails ahora que width/height son correctos
 }
 
 function draw() {
@@ -620,6 +661,7 @@ function deleteQuad(index) {
   undoStack.length = 0;
   renderQuadList();
   saveToLocalStorage();
+  updateCurrentSceneThumbnail();
 }
 
 function changeQuadSource(index, type) {
@@ -791,7 +833,10 @@ function mouseReleased() {
     finalizeQuad();
     return;
   }
-  if (selected.quad != -1) saveToLocalStorage();
+  if (selected.quad != -1) {
+    saveToLocalStorage();
+    updateCurrentSceneThumbnail();
+  }
   selected = { quad: -1, vert: -1 };
 }
 
@@ -805,4 +850,286 @@ function doubleClicked() {
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
+}
+
+// --- GESTIÓN DE ESCENAS ---
+
+function snapshotCurrentScene() {
+  if (!scenes[currentSceneIndex]) return;
+  scenes[currentSceneIndex].hydraCode = document.getElementById('code').value;
+  scenes[currentSceneIndex].quads = quads.map(q =>
+    q.kind === 'freeform'
+      ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType }
+      : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType }
+  );
+}
+
+function _applySceneData(sceneData) {
+  quads.forEach((_, i) => clearQuadSource(i));
+  quads = [];
+  const code = sceneData.hydraCode || '';
+  document.getElementById('code').value = code;
+  if (code) evalHydra(code);
+  quads = (sceneData.quads || []).map(q => {
+    const srcType = q.sourceType === 'camera' ? 'camera' : (q.sourceType || 'hydra');
+    if (q.kind === 'freeform') {
+      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null };
+    }
+    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null };
+    buildTessCache(quad);
+    return quad;
+  });
+  undoStack.length = 0;
+  renderQuadList();
+  quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
+}
+
+function switchScene(index) {
+  if (index === currentSceneIndex) return;
+  snapshotCurrentScene();
+  currentSceneIndex = index;
+  _applySceneData(scenes[index]);
+  saveToLocalStorage();
+  renderSceneStrip();
+}
+
+function addScene() {
+  if (isPlaying) stopPlayback();
+  snapshotCurrentScene();
+  const newId = scenes.reduce((m, s) => Math.max(m, s.id), 0) + 1;
+  const current = scenes[currentSceneIndex];
+  scenes.push({
+    id: newId,
+    duration_s: current.duration_s,
+    hydraCode: current.hydraCode || '',
+    quads: (current.quads || []).map(q =>
+      q.kind === 'freeform'
+        ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType }
+        : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType }
+    )
+  });
+  currentSceneIndex = scenes.length - 1;
+  _applySceneData(scenes[currentSceneIndex]);
+  saveToLocalStorage();
+  renderSceneStrip();
+}
+
+function deleteScene(index) {
+  if (scenes.length <= 1) return;
+  if (isPlaying) stopPlayback();
+  scenes.splice(index, 1);
+  if (currentSceneIndex >= scenes.length) currentSceneIndex = scenes.length - 1;
+  else if (index < currentSceneIndex) currentSceneIndex--;
+  _applySceneData(scenes[currentSceneIndex]);
+  saveToLocalStorage();
+  renderSceneStrip();
+}
+
+function renderSceneThumbnail(canvas, sceneData) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, W, H);
+
+  const quadsData = sceneData.quads || [];
+  if (quadsData.length === 0) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    ctx.lineWidth = 0.5;
+    const cx = W / 2, cy = H / 2;
+    ctx.beginPath(); ctx.moveTo(cx - 5, cy); ctx.lineTo(cx + 5, cy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, cy - 5); ctx.lineTo(cx, cy + 5); ctx.stroke();
+    return;
+  }
+
+  const refW = (typeof width !== 'undefined' ? width : 1280) / 2;
+  const refH = (typeof height !== 'undefined' ? height : 720) / 2;
+  const toTX = x => (x / refW * 0.82 + 1) / 2 * W;
+  const toTY = y => (y / refH * 0.82 + 1) / 2 * H;
+
+  quadsData.forEach((q, qi) => {
+    const hue = (qi * 73 + 180) % 360;
+    ctx.fillStyle = `hsla(${hue},55%,55%,0.22)`;
+    ctx.strokeStyle = `hsla(${hue},55%,72%,0.7)`;
+    ctx.lineWidth = 0.8;
+    if (q.kind === 'freeform') {
+      const verts = q.vertices || [];
+      if (verts.length < 3) return;
+      ctx.beginPath();
+      ctx.moveTo(toTX(verts[0].x), toTY(verts[0].y));
+      for (let i = 1; i < verts.length; i++) ctx.lineTo(toTX(verts[i].x), toTY(verts[i].y));
+      ctx.closePath();
+    } else {
+      const pts = q.points || [];
+      if (pts.length < 9) return;
+      ctx.beginPath();
+      ctx.moveTo(toTX(pts[0].x), toTY(pts[0].y));
+      ctx.lineTo(toTX(pts[2].x), toTY(pts[2].y));
+      ctx.lineTo(toTX(pts[8].x), toTY(pts[8].y));
+      ctx.lineTo(toTX(pts[6].x), toTY(pts[6].y));
+      ctx.closePath();
+    }
+    ctx.fill();
+    ctx.stroke();
+  });
+}
+
+function updateCurrentSceneThumbnail() {
+  snapshotCurrentScene();
+  const items = document.querySelectorAll('.scene-item');
+  const thumb = items[currentSceneIndex]?.querySelector('.scene-thumb');
+  if (thumb) renderSceneThumbnail(thumb, scenes[currentSceneIndex]);
+}
+
+function renderSceneStrip() {
+  const strip = document.getElementById('scenes-strip');
+  if (!strip) return;
+  strip.innerHTML = '';
+
+  scenes.forEach((scene, i) => {
+    const item = document.createElement('div');
+    item.className = 'scene-item' + (i === currentSceneIndex ? ' active' : '');
+
+    const header = document.createElement('div');
+    header.className = 'scene-header';
+    header.addEventListener('click', () => {
+      if (isPlaying) stopPlayback();
+      switchScene(i);
+    });
+
+    const thumb = document.createElement('canvas');
+    thumb.className = 'scene-thumb';
+    thumb.width = 56;
+    thumb.height = 40;
+    renderSceneThumbnail(thumb, scene);
+    header.appendChild(thumb);
+
+    const num = document.createElement('span');
+    num.className = 'scene-num';
+    num.textContent = i + 1;
+    header.appendChild(num);
+
+    if (scenes.length > 1) {
+      const del = document.createElement('button');
+      del.className = 'scene-delete';
+      del.textContent = '×';
+      del.title = 'eliminar escena';
+      del.addEventListener('click', e => { e.stopPropagation(); deleteScene(i); });
+      header.appendChild(del);
+    }
+
+    item.appendChild(header);
+
+    const durRow = document.createElement('div');
+    durRow.className = 'scene-dur-row';
+    const durInput = document.createElement('input');
+    durInput.type = 'number';
+    durInput.className = 'scene-duration';
+    durInput.min = 1;
+    durInput.max = 9999;
+    durInput.value = scene.duration_s;
+    durInput.addEventListener('change', () => {
+      scene.duration_s = Math.max(1, parseInt(durInput.value) || 30);
+      durInput.value = scene.duration_s;
+      saveToLocalStorage();
+    });
+    durInput.addEventListener('click', e => e.stopPropagation());
+    const unit = document.createElement('span');
+    unit.className = 'scene-unit';
+    unit.textContent = 's';
+    durRow.appendChild(durInput);
+    durRow.appendChild(unit);
+    item.appendChild(durRow);
+
+    strip.appendChild(item);
+  });
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'scene-add-btn';
+  addBtn.textContent = '+';
+  addBtn.title = 'nueva escena';
+  addBtn.addEventListener('click', addScene);
+  strip.appendChild(addBtn);
+
+  ['once', 'loop', 'random'].forEach(mode => {
+    const btn = document.getElementById('pbtn-' + mode);
+    if (btn) btn.classList.toggle('active', isPlaying && playbackMode === mode);
+  });
+}
+
+// --- REPRODUCCIÓN ---
+
+function setPlaybackMode(mode) {
+  if (isPlaying && playbackMode === mode) { stopPlayback(); return; }
+  playbackMode = mode;
+  if (!isPlaying) startPlayback();
+  else renderSceneStrip();
+}
+
+function startPlayback() {
+  if (isPlaying) stopPlayback();
+  if (uiVisible) toggleEditMode();
+  isPlaying = true;
+  sceneStartTime = Date.now();
+  scheduleAdvance();
+  renderSceneStrip();
+  updateHUD();
+  document.getElementById('playback-hud').classList.add('visible');
+  hudInterval = setInterval(updateHUD, 500);
+}
+
+function stopPlayback() {
+  isPlaying = false;
+  clearTimeout(playbackTimeout);
+  playbackTimeout = null;
+  clearInterval(hudInterval);
+  hudInterval = null;
+  document.getElementById('playback-hud').classList.remove('visible');
+  renderSceneStrip();
+}
+
+function updateHUD() {
+  const hud = document.getElementById('playback-hud');
+  if (!hud) return;
+  const elapsed = (Date.now() - sceneStartTime) / 1000;
+  const remaining = Math.max(0, Math.ceil(scenes[currentSceneIndex].duration_s - elapsed));
+  const icon = { once: '▶', loop: '⟳', random: '⇄' }[playbackMode] || '▶';
+  hud.textContent = `${currentSceneIndex + 1} / ${scenes.length}  ·  ${remaining}s  ·  ${icon}`;
+}
+
+function scheduleAdvance() {
+  playbackTimeout = setTimeout(advanceScene, scenes[currentSceneIndex].duration_s * 1000);
+}
+
+function nextPlaybackIndex() {
+  const n = scenes.length;
+  if (n === 1) return playbackMode === 'once' ? -1 : 0;
+  if (playbackMode === 'once') {
+    const next = currentSceneIndex + 1;
+    return next < n ? next : -1;
+  }
+  if (playbackMode === 'loop') return (currentSceneIndex + 1) % n;
+  if (playbackMode === 'random') {
+    const pool = Array.from({ length: n }, (_, i) => i).filter(i => i !== currentSceneIndex);
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  return -1;
+}
+
+function advanceScene() {
+  const next = nextPlaybackIndex();
+  if (next === -1) { stopPlayback(); return; }
+  const fadeEl = document.getElementById('scene-fade');
+  fadeEl.classList.add('fading');
+  setTimeout(() => {
+    snapshotCurrentScene();
+    currentSceneIndex = next;
+    sceneStartTime = Date.now();
+    _applySceneData(scenes[next]);
+    saveToLocalStorage();
+    renderSceneStrip();
+    updateHUD();
+    fadeEl.classList.remove('fading');
+    if (isPlaying) scheduleAdvance();
+  }, 350);
 }

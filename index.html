@@ -53,6 +53,16 @@
     </div>
 
     <div class="panel-section">
+      <div class="section-label">escenas</div>
+      <div id="scenes-strip"></div>
+      <div class="playback-controls">
+        <button id="pbtn-once"   class="playback-btn" onclick="setPlaybackMode('once')"   title="reproducir una vez">▶</button>
+        <button id="pbtn-loop"   class="playback-btn" onclick="setPlaybackMode('loop')"   title="loop">⟳</button>
+        <button id="pbtn-random" class="playback-btn" onclick="setPlaybackMode('random')" title="aleatoria">⇄</button>
+      </div>
+    </div>
+
+    <div class="panel-section">
       <div class="section-label">hydra</div>
       <textarea id="code">
 // MINIMAPPER - Hydra + Mapping
@@ -73,6 +83,12 @@ osc(1, 1, 1).out();
     </div>
 
   </div>
+
+  <!-- Fade entre escenas -->
+  <div id="scene-fade"></div>
+
+  <!-- HUD de reproducción -->
+  <div id="playback-hud"></div>
 
   <!-- Canvas de Hydra (oculto) -->
   <canvas id="myCanvas" width="512px" height="512px"></canvas>

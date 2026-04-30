@@ -409,3 +409,240 @@ select option {
   50% { opacity: 1; }
   100% { opacity: 0.2; }
 }
+
+/* --- Escenas --- */
+#scenes-strip {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  margin-bottom: 8px;
+}
+
+#scenes-strip::-webkit-scrollbar {
+  height: 3px;
+}
+#scenes-strip::-webkit-scrollbar-track { background: transparent; }
+#scenes-strip::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+
+.scene-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.scene-header {
+  width: 56px;
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.scene-header:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.scene-item.active .scene-header {
+  border-color: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.scene-thumb {
+  display: block;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.scene-num {
+  position: absolute;
+  bottom: 3px;
+  right: 4px;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.45);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  user-select: none;
+  line-height: 1;
+}
+
+.scene-item.active .scene-num {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.scene-delete {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  margin: 0;
+  font-size: 9px;
+  line-height: 1;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.scene-item:hover .scene-delete {
+  opacity: 1;
+}
+
+.scene-delete:hover {
+  color: white;
+  background: rgba(180, 40, 40, 0.9);
+  border-color: rgba(255, 80, 80, 0.5);
+}
+
+.scene-dur-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.scene-duration {
+  width: 36px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  color: rgba(255, 255, 255, 0.55);
+  font-family: monospace;
+  font-size: 10px;
+  padding: 2px 4px;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.scene-duration::-webkit-outer-spin-button,
+.scene-duration::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+}
+
+.scene-duration:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.35);
+  color: white;
+}
+
+.scene-unit {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.3);
+  user-select: none;
+}
+
+.scene-add-btn {
+  width: 56px;
+  height: 40px;
+  margin: 0;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+  background: none;
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  color: rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.scene-add-btn:hover {
+  border-color: rgba(255, 255, 255, 0.5);
+  color: rgba(255, 255, 255, 0.8);
+  background: none;
+}
+
+/* --- Controles de reproducción --- */
+.playback-controls {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.playback-btn {
+  margin: 0;
+  padding: 3px 10px;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1.4;
+}
+
+.playback-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+}
+
+.playback-btn.active {
+  background: rgba(255, 200, 64, 0.18);
+  border-color: rgba(255, 200, 64, 0.55);
+  color: #ffc840;
+}
+
+/* --- Fade entre escenas --- */
+#scene-fade {
+  position: fixed;
+  inset: 0;
+  background: black;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 5;
+  transition: opacity 0.35s ease;
+}
+
+#scene-fade.fading {
+  opacity: 1;
+}
+
+/* --- HUD de reproducción --- */
+#playback-hud {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  font-family: monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.5);
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  padding: 4px 10px;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+
+#playback-hud.visible {
+  opacity: 1;
+}
