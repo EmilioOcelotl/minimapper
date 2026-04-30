@@ -134,14 +134,16 @@ function saveSession() {
       hydraCode: s.hydraCode || '',
       quads: si === currentSceneIndex
         ? quads.map(q => {
+            const srcUrl = (q.sourceUrl && q.sourceUrl.startsWith('http')) ? q.sourceUrl : null;
             let imageData = null;
-            if (q.sourceType === 'image' && q.sourceEl && q.sourceEl.canvas) {
+            if (!srcUrl && q.sourceType === 'image' && q.sourceEl && q.sourceEl.canvas) {
               try { imageData = q.sourceEl.canvas.toDataURL('image/png'); } catch (e) {}
             }
-            const srcType = imageData ? q.sourceType : (q.sourceType === 'image' ? 'hydra' : q.sourceType);
+            const srcType = (srcUrl || imageData) ? q.sourceType : (q.sourceType === 'image' ? 'hydra' : q.sourceType);
             const data = q.kind === 'freeform'
               ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: srcType }
               : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: srcType };
+            if (srcUrl) data.sourceUrl = srcUrl;
             if (imageData) data.imageData = imageData;
             return data;
           })
@@ -211,7 +213,9 @@ function applySession(session) {
         buildTessCache(quad);
       }
       quads.push(quad);
-      if (qData.sourceType === 'image' && qData.imageData) {
+      if (qData.sourceUrl && qData.sourceUrl.startsWith('http')) {
+        loadQuadSourceFromUrl(i, qData.sourceUrl);
+      } else if (qData.sourceType === 'image' && qData.imageData) {
         pending++;
         loadImage(qData.imageData, (img) => {
           quads[i].sourceType = 'image';
@@ -251,7 +255,9 @@ function applySession(session) {
         buildTessCache(quad);
       }
       quads.push(quad);
-      if (qData.sourceType === 'image' && qData.imageData) {
+      if (qData.sourceUrl && qData.sourceUrl.startsWith('http')) {
+        loadQuadSourceFromUrl(i, qData.sourceUrl);
+      } else if (qData.sourceType === 'image' && qData.imageData) {
         pending++;
         loadImage(qData.imageData, (img) => {
           quads[i].sourceType = 'image';
@@ -310,8 +316,6 @@ function loadFromLocalStorage() {
       currentSceneIndex = 0;
     }
 
-    _applySceneData(scenes[currentSceneIndex]);
-    renderSceneStrip();
     console.log("Configuración cargada");
   } catch (e) {
     console.error("Error al cargar configuración:", e);
@@ -490,7 +494,8 @@ function setup() {
   hc = select("#myCanvas");
   hc.hide();
   window.noise = _hydraNoise; // restore after p5 overwrote it
-  renderSceneStrip(); // re-render thumbnails ahora que width/height son correctos
+  _applySceneData(scenes[currentSceneIndex]);
+  renderSceneStrip();
 }
 
 function draw() {
@@ -499,6 +504,10 @@ function draw() {
 
   for (let q = 0; q < quads.length; q++) {
     const quad = quads[q];
+
+    if (quad.sourceVideo && quad.sourceVideo.readyState >= 2) {
+      quad.sourceEl.drawingContext.drawImage(quad.sourceVideo, 0, 0, 512, 512);
+    }
 
     if (quad.sourceEl && quad.sourceType !== 'hydra') {
       texture(quad.sourceEl);
@@ -639,8 +648,14 @@ function addQuad() {
 function clearQuadSource(index) {
   const quad = quads[index];
   if (quad.sourceUrl) {
-    URL.revokeObjectURL(quad.sourceUrl);
+    if (!quad.sourceUrl.startsWith('http')) URL.revokeObjectURL(quad.sourceUrl);
     quad.sourceUrl = null;
+  }
+  if (quad.sourceVideo) {
+    quad.sourceVideo.pause();
+    quad.sourceVideo.src = '';
+    if (quad.sourceVideo.parentNode) quad.sourceVideo.parentNode.removeChild(quad.sourceVideo);
+    quad.sourceVideo = null;
   }
   if (quad.sourceType === 'camera' && quad.sourceEl) {
     const vid = quad.sourceEl.elt;
@@ -723,9 +738,8 @@ function loadQuadSource(index) {
     if (type === 'video') {
       let vid = createVideo(url);
       vid.hide();
-      vid.loop();
       vid.volume(0);
-      vid.play();
+      vid.loop();
       quads[index].sourceEl = vid;
     } else {
       loadImage(url, (img) => {
@@ -737,6 +751,39 @@ function loadQuadSource(index) {
   input.click();
 }
 
+function loadQuadSourceFromUrl(index, url) {
+  if (!url || !url.startsWith('http')) return;
+  const type = quads[index].sourceType;
+  if (type === 'hydra' || type === 'camera') return;
+  clearQuadSource(index);
+  quads[index].sourceUrl = url;
+  if (type === 'video') {
+    // Create video element with crossOrigin set BEFORE src to avoid tainted-canvas crash
+    const videoEl = document.createElement('video');
+    videoEl.crossOrigin = 'anonymous';
+    videoEl.muted = true;
+    videoEl.loop = true;
+    videoEl.style.display = 'none';
+    document.body.appendChild(videoEl);
+    videoEl.addEventListener('error', () => {
+      console.error('Video decode error (código', videoEl.error?.code, ')— convierte el archivo a H.264/MP4.');
+      clearQuadSource(index);
+      renderQuadList();
+    });
+    videoEl.src = url;
+    videoEl.play().catch(() => {});
+    // Proxy canvas: draw video frames here each tick instead of using video as WebGL texture directly
+    const pg = createGraphics(512, 512);
+    quads[index].sourceVideo = videoEl;
+    quads[index].sourceEl = pg;
+  } else {
+    loadImage(url, (img) => {
+      quads[index].sourceEl = img;
+    });
+  }
+  saveToLocalStorage();
+}
+
 function renderQuadList() {
   const container = document.getElementById("quad-list");
   if (!container) return;
@@ -746,8 +793,15 @@ function renderQuadList() {
     const div = document.createElement("div");
     div.className = 'quad-item';
 
-    const loadBtn = (q.sourceType === 'video' || q.sourceType === 'image')
-      ? `<button onclick="loadQuadSource(${i})">Cargar</button>`
+    const hasMedia = q.sourceType === 'video' || q.sourceType === 'image';
+    const fileBtn = hasMedia ? `<button onclick="loadQuadSource(${i})">Archivo</button>` : '';
+    const currentUrl = (q.sourceUrl && q.sourceUrl.startsWith('http')) ? q.sourceUrl : '';
+    const urlRow = hasMedia
+      ? `<div class="quad-url-row">
+          <input type="text" class="quad-url-input" value="${currentUrl}" placeholder="https://..."
+            onkeydown="if(event.key==='Enter')loadQuadSourceFromUrl(${i},this.value.trim())">
+          <button onclick="loadQuadSourceFromUrl(${i},this.parentElement.querySelector('input').value.trim())">URL</button>
+        </div>`
       : '';
 
     div.innerHTML = `
@@ -759,9 +813,10 @@ function renderQuadList() {
           <option value="image"  ${q.sourceType === 'image'  ? 'selected' : ''}>Imagen</option>
           <option value="camera" ${q.sourceType === 'camera' ? 'selected' : ''}>Cámara</option>
         </select>
-        ${loadBtn}
+        ${fileBtn}
         <button onclick="deleteQuad(${i})">✕</button>
       </div>
+      ${urlRow}
     `;
 
     container.appendChild(div);
@@ -857,11 +912,14 @@ function windowResized() {
 function snapshotCurrentScene() {
   if (!scenes[currentSceneIndex]) return;
   scenes[currentSceneIndex].hydraCode = document.getElementById('code').value;
-  scenes[currentSceneIndex].quads = quads.map(q =>
-    q.kind === 'freeform'
+  scenes[currentSceneIndex].quads = quads.map(q => {
+    const srcUrl = (q.sourceUrl && q.sourceUrl.startsWith('http')) ? q.sourceUrl : null;
+    const data = q.kind === 'freeform'
       ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType }
-      : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType }
-  );
+      : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType };
+    if (srcUrl) data.sourceUrl = srcUrl;
+    return data;
+  });
 }
 
 function _applySceneData(sceneData) {
@@ -880,8 +938,15 @@ function _applySceneData(sceneData) {
     return quad;
   });
   undoStack.length = 0;
+  quads.forEach((q, i) => {
+    const qData = sceneData.quads[i];
+    if (qData && qData.sourceUrl && qData.sourceUrl.startsWith('http')) {
+      loadQuadSourceFromUrl(i, qData.sourceUrl);
+    } else if (q.sourceType === 'camera') {
+      startCamera(i);
+    }
+  });
   renderQuadList();
-  quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
 }
 
 function switchScene(index) {

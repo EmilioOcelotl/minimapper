@@ -240,6 +240,28 @@ label {
   padding: 2px 8px;
 }
 
+.quad-url-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.quad-url-input {
+  flex: 1;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 3px;
+  color: #ccc;
+  font-size: 11px;
+  padding: 2px 5px;
+  font-family: inherit;
+}
+
+.quad-url-input::placeholder {
+  color: rgba(255,255,255,0.25);
+}
+
 .hydra-actions {
   display: flex;
   align-items: center;
