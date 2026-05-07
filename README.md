@@ -24,6 +24,7 @@ Superficie cuadrangular con parche Bezier cuadrático (grilla 3×3 de puntos de 
 - Clic en **+ Quad**, luego clic y arrastra en el canvas para definir el área
 - **Puntos rojos (esquinas):** están sobre la superficie — arrástralos para reposicionar
 - **Puntos amarillos (intermedios):** curvan los bordes sin tocar la superficie
+- Mantén **M** al hacer clic en cualquier punto para mover toda la superficie en conjunto
 - Soltar crea el quad; ESC cancela
 
 ### Libre (freeform)
@@ -32,6 +33,7 @@ Polígono de forma libre con cualquier número de vértices.
 - Clic en **+ Libre** para activar el modo
 - Clic en el canvas para colocar cada vértice
 - Cierra la forma con **doble clic** en cualquier parte, o con **clic en el primer vértice** (se vuelve verde al acercarse)
+- Mantén **M** al hacer clic en cualquier vértice para mover toda la forma en conjunto
 - Mínimo 3 vértices; ESC cancela
 
 ## Fuentes de textura
@@ -59,6 +61,7 @@ El código Hydra y la posición de los vértices también se auto-guardan en el 
 | Mostrar / ocultar UI | **CTRL + SHIFT + H** o clic en ✦ |
 | Silenciar Hydra / cancelar modo dibujo | **ESC** |
 | Deshacer movimiento de vértice | **CTRL + Z** |
+| Mover toda la superficie | **M** + clic y arrastra cualquier punto |
 
 ## Créditos
 

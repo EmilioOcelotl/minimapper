@@ -854,7 +854,7 @@ function mousePressed() {
       const sy = pts[i].y + height / 2;
       if (dist(mouseX, mouseY, sx, sy) < 10) {
         pushUndo();
-        selected = { quad: q, vert: i };
+        selected = { quad: q, vert: i, move: keyIsDown(77) };
         return;
       }
     }
@@ -871,7 +871,13 @@ function mouseDragged() {
 
   if (selected.quad != -1) {
     const shape = quads[selected.quad];
-    if (shape.kind === 'freeform') {
+    if (selected.move) { // M was held at click time — move whole shape
+      const dx = mouseX - pmouseX;
+      const dy = mouseY - pmouseY;
+      const pts = shape.kind === 'freeform' ? shape.vertices : shape.points;
+      for (const p of pts) { p.x += dx; p.y += dy; }
+      if (shape.kind !== 'freeform') buildTessCache(shape);
+    } else if (shape.kind === 'freeform') {
       shape.vertices[selected.vert].x = mouseX - width / 2;
       shape.vertices[selected.vert].y = mouseY - height / 2;
     } else {
