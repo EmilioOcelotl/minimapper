@@ -953,8 +953,8 @@ function initMic() {
       micActive = true;
       energyAvg = 0;
       lastOnsetTime = 0;
-      document.getElementById('mic-btn')?.classList.add('active');
-      document.getElementById('mic-sensitivity').style.display = 'block';
+      document.querySelectorAll('.mic-btn').forEach(b => b.classList.add('active'));
+      document.querySelectorAll('.mic-sensitivity').forEach(el => el.style.display = '');
     })
     .catch(err => {
       const msg = err.name === 'NotAllowedError' ? 'Permiso de micrófono denegado.'
@@ -969,8 +969,8 @@ function stopMic() {
   micAnalyser = null;
   micBuffer = null;
   micActive = false;
-  document.getElementById('mic-btn')?.classList.remove('active');
-  document.getElementById('mic-sensitivity').style.display = 'none';
+  document.querySelectorAll('.mic-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.mic-sensitivity').forEach(el => el.style.display = 'none');
 }
 
 function renderQuadList() {
@@ -1016,6 +1016,14 @@ function renderQuadList() {
               <button onclick="removeCarouselImage(${i},${j})">✕</button>
             </div>`).join('')}
           <button class="carousel-add-btn" onclick="addCarouselImage(${i})">+ imagen</button>
+          <div class="carousel-mic-row">
+            <button class="mic-btn${micActive ? ' active' : ''}" onclick="toggleMic()" title="Activar/desactivar detección de aplauso">mic</button>
+            <div class="mic-sensitivity" style="${micActive ? '' : 'display:none'}">
+              <span class="sensitivity-label">sensibilidad</span>
+              <input type="range" min="15" max="65" step="5" value="${Math.round(80 - onsetRatio * 10)}"
+                oninput="onsetRatio = (80 - this.value) / 10">
+            </div>
+          </div>
         </div>`
       : '';
 

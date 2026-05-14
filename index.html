@@ -48,14 +48,6 @@
       <div class="section-actions">
         <button id="add-quad-btn" onclick="startDrawingQuad()">+ Quad</button>
         <button id="add-freeform-btn" onclick="startDrawingFreeform()">+ Libre</button>
-        <button id="mic-btn" onclick="toggleMic()" title="Activar/desactivar detección de aplauso">mic</button>
-      </div>
-      <div id="mic-sensitivity" style="display:none">
-        <div class="sensitivity-row">
-          <span class="sensitivity-label">sensibilidad</span>
-          <input type="range" min="15" max="65" step="5" value="45"
-            oninput="onsetRatio = (80 - this.value) / 10">
-        </div>
       </div>
       <div id="quad-list"></div>
     </div>

@@ -312,13 +312,18 @@ label {
   font-size: 12px;
 }
 
-/* --- Slider de sensibilidad del mic --- */
-#mic-sensitivity {
-  margin-top: 16px;
-  margin-bottom: 5px;
+/* --- Mic / sensibilidad (dentro de carrusel) --- */
+.carousel-mic-row {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
-.sensitivity-row {
+.mic-sensitivity {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -331,8 +336,10 @@ label {
   flex-shrink: 0;
 }
 
-.sensitivity-row input[type="range"] {
+.mic-sensitivity input[type="range"] {
   flex: 1;
+  min-width: 0;
+  width: 0;
   height: 2px;
   accent-color: rgba(255, 255, 255, 0.6);
   cursor: pointer;

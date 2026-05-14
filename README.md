@@ -40,7 +40,7 @@ Polígono de forma libre con cualquier número de vértices.
 
 Cada superficie puede usar una fuente distinta, seleccionable con el menú junto a su nombre:
 
-- **Hydra:** usa el canvas de Hydra (por defecto)
+- **Hydra:** cada superficie tiene su propio editor de código Hydra y su propio output (o0–o3). El slot se asigna automáticamente al crear la superficie y aparece en el label (`Quad 0 — o0`). Usa CTRL+Enter o el botón ▶ para ejecutar el código.
 - **Video:** carga un archivo de video local con el botón "Cargar"
 - **Imagen:** carga una imagen local con el botón "Cargar"
 - **Cámara:** usa la webcam conectada (pide permiso al navegador)
