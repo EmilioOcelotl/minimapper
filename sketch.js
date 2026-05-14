@@ -51,7 +51,7 @@ document.addEventListener('keydown', (e) => {
     else if (isPlaying) { stopPlayback(); if (!uiVisible) toggleEditMode(); }
     else stopHydra();
   }
-  if (e.ctrlKey && e.key === 'z' && document.activeElement !== document.getElementById('code')) {
+  if (e.ctrlKey && e.key === 'z' && document.activeElement.tagName !== 'TEXTAREA') {
     e.preventDefault();
     undo();
   }
@@ -112,6 +112,18 @@ function runHydra() {
   saveToLocalStorage();
 }
 
+function runQuadHydra(index) {
+  const code = quads[index]?.hydraCode || '';
+  const statusEl = document.getElementById(`hydra-status-${index}`);
+  const blocked = evalHydra(code);
+  if (blocked) {
+    if (statusEl) { statusEl.textContent = '✗'; statusEl.className = 'status-error'; clearTimeout(statusEl._t); statusEl._t = setTimeout(() => { statusEl.textContent = ''; statusEl.className = ''; }, 3000); }
+    return;
+  }
+  if (statusEl) { statusEl.textContent = '✓'; statusEl.className = 'status-ok'; clearTimeout(statusEl._t); statusEl._t = setTimeout(() => { statusEl.textContent = ''; statusEl.className = ''; }, 3000); }
+  saveToLocalStorage();
+}
+
 function stopHydra() {
   try {
     hush();
@@ -145,6 +157,7 @@ function saveSession() {
               : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: srcType };
             if (srcUrl) data.sourceUrl = srcUrl;
             if (imageData) data.imageData = imageData;
+            if (q.sourceType === 'hydra') data.hydraCode = q.hydraCode || '';
             return data;
           })
         : s.quads
@@ -197,19 +210,17 @@ function applySession(session) {
     playbackMode = session.playbackMode || 'once';
 
     const sceneData = scenes[currentSceneIndex];
-    const code = sceneData.hydraCode || '';
-    document.getElementById('code').value = code;
-    if (code) evalHydra(code);
-
     let pending = 0;
+    const legacyCode = sceneData.hydraCode || '';
     (sceneData.quads || []).forEach((qData, i) => {
       const srcType = qData.sourceType === 'camera' ? 'camera' : (qData.sourceType || 'hydra');
+      const hydraCode = qData.hydraCode != null ? qData.hydraCode : (srcType === 'hydra' ? legacyCode : '');
       let quad;
       if (qData.kind === 'freeform') {
-        quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null };
+        quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode };
       } else {
         const pts = qData.points || qData;
-        quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null };
+        quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode };
         buildTessCache(quad);
       }
       quads.push(quad);
@@ -223,6 +234,8 @@ function applySession(session) {
           pending--;
           if (pending === 0) { renderQuadList(); saveToLocalStorage(); }
         });
+      } else if (srcType === 'hydra' && hydraCode) {
+        evalHydra(hydraCode);
       }
     });
     quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
@@ -447,7 +460,8 @@ function finalizeFreeform() {
     vertices: freeformVerts.map(v => createVector(v.x, v.y)),
     sourceType: 'hydra',
     sourceEl: null,
-    sourceUrl: null
+    sourceUrl: null,
+    hydraCode: ''
   };
   quads.push(shape);
   undoStack.length = 0;
@@ -486,7 +500,7 @@ function finalizeQuad() {
     }
   }
 
-  const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null };
+  const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null, hydraCode: '' };
   buildTessCache(newQuad);
   quads.push(newQuad);
   undoStack.length = 0;
@@ -664,7 +678,7 @@ function addQuad() {
     }
   }
 
-  const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null };
+  const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null, hydraCode: '' };
   buildTessCache(newQuad);
   quads.push(newQuad);
   renderQuadList();
@@ -714,7 +728,10 @@ function changeQuadSource(index, type) {
   clearQuadSource(index);
   quads[index].sourceType = type;
   quads[index].sourceEl = null;
-  if (type === 'carousel') {
+  if (type === 'hydra') {
+    if (!quads[index].hydraCode) quads[index].hydraCode = '';
+    renderQuadList();
+  } else if (type === 'carousel') {
     if (!quads[index].carousel) quads[index].carousel = [];
     if (quads[index].carouselIndex == null) quads[index].carouselIndex = 0;
     renderQuadList();
@@ -920,6 +937,20 @@ function renderQuadList() {
         </div>`
       : '';
 
+    const hydraSection = q.sourceType === 'hydra'
+      ? `<div class="quad-hydra-section">
+          <textarea class="quad-hydra-code" id="hydra-code-${i}"
+            oninput="quads[${i}].hydraCode=this.value"
+            onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();runQuadHydra(${i});}"
+          >${q.hydraCode || ''}</textarea>
+          <div class="quad-hydra-actions">
+            <button onclick="runQuadHydra(${i})">▶</button>
+            <button onclick="stopHydra()">■</button>
+            <span id="hydra-status-${i}"></span>
+          </div>
+        </div>`
+      : '';
+
     const carousel = q.carousel || [];
     const carouselSection = q.sourceType === 'carousel'
       ? `<div class="carousel-list">
@@ -946,6 +977,7 @@ function renderQuadList() {
         <button onclick="deleteQuad(${i})">✕</button>
       </div>
       ${urlRow}
+      ${hydraSection}
       ${carouselSection}
     `;
 
@@ -1047,13 +1079,13 @@ function windowResized() {
 
 function snapshotCurrentScene() {
   if (!scenes[currentSceneIndex]) return;
-  scenes[currentSceneIndex].hydraCode = document.getElementById('code').value;
   scenes[currentSceneIndex].quads = quads.map(q => {
     const srcUrl = (q.sourceUrl && q.sourceUrl.startsWith('http')) ? q.sourceUrl : null;
     const data = q.kind === 'freeform'
       ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType }
       : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType };
     if (srcUrl) data.sourceUrl = srcUrl;
+    if (q.sourceType === 'hydra') data.hydraCode = q.hydraCode || '';
     return data;
   });
 }
@@ -1061,15 +1093,15 @@ function snapshotCurrentScene() {
 function _applySceneData(sceneData) {
   quads.forEach((_, i) => clearQuadSource(i));
   quads = [];
-  const code = sceneData.hydraCode || '';
-  document.getElementById('code').value = code;
-  if (code) evalHydra(code);
+  // Migrate: if scene has a global hydraCode but no per-quad codes, use it for all hydra quads
+  const legacyCode = sceneData.hydraCode || '';
   quads = (sceneData.quads || []).map(q => {
     const srcType = q.sourceType === 'camera' ? 'camera' : (q.sourceType || 'hydra');
+    const hydraCode = q.hydraCode != null ? q.hydraCode : (srcType === 'hydra' ? legacyCode : '');
     if (q.kind === 'freeform') {
-      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null };
+      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode };
     }
-    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null };
+    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode };
     buildTessCache(quad);
     return quad;
   });
@@ -1080,6 +1112,8 @@ function _applySceneData(sceneData) {
       loadQuadSourceFromUrl(i, qData.sourceUrl);
     } else if (q.sourceType === 'camera') {
       startCamera(i);
+    } else if (q.sourceType === 'hydra' && q.hydraCode) {
+      evalHydra(q.hydraCode);
     }
   });
   renderQuadList();
@@ -1105,8 +1139,8 @@ function addScene() {
     hydraCode: current.hydraCode || '',
     quads: (current.quads || []).map(q =>
       q.kind === 'freeform'
-        ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType }
-        : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType }
+        ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType, hydraCode: q.hydraCode || '' }
+        : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType, hydraCode: q.hydraCode || '' }
     )
   });
   currentSceneIndex = scenes.length - 1;

@@ -162,6 +162,14 @@ label {
   padding: 12px 0;
 }
 
+.panel-section:first-of-type {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
 .panel-section + .panel-section {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -185,9 +193,10 @@ label {
 }
 
 #quad-list {
-  max-height: 320px;
+  flex: 1;
   overflow-y: auto;
   margin-top: 6px;
+  min-height: 0;
 }
 
 #quad-list::-webkit-scrollbar {
@@ -260,6 +269,47 @@ label {
 
 .quad-url-input::placeholder {
   color: rgba(255,255,255,0.25);
+}
+
+/* --- Hydra inline por quad --- */
+.quad-hydra-section {
+  margin-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 5px;
+}
+
+.quad-hydra-code {
+  width: 100%;
+  height: 80px;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  color: #e0e0e0;
+  font-family: monospace;
+  font-size: 11px;
+  padding: 5px;
+  resize: vertical;
+  margin-top: 0;
+}
+
+.quad-hydra-code:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.quad-hydra-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.quad-hydra-actions button {
+  margin-top: 0;
+  padding: 2px 10px;
+  font-size: 12px;
 }
 
 /* --- Slider de sensibilidad del mic --- */
