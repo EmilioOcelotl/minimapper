@@ -406,6 +406,17 @@ let drawCurrent = null;
 let freeformMode = false;
 let freeformVerts = [];
 
+// --- DETECCIÓN DE APLAUSO ---
+let micContext = null;
+let micAnalyser = null;
+let micBuffer = null;
+let micActive = false;
+let lastOnsetTime = 0;
+let energyAvg = 0;
+const ONSET_COOLDOWN = 800;
+let onsetRatio = 3.5;
+const ONSET_MIN = 0.04;
+
 function startDrawingQuad() {
   if (freeformMode) cancelFreeform();
   drawingMode = true;
@@ -502,6 +513,19 @@ function draw() {
   background(0);
   textureMode(NORMAL);
 
+  if (micActive && micAnalyser) {
+    micAnalyser.getFloatTimeDomainData(micBuffer);
+    let rms = 0;
+    for (let i = 0; i < micBuffer.length; i++) rms += micBuffer[i] * micBuffer[i];
+    rms = Math.sqrt(rms / micBuffer.length);
+    energyAvg = energyAvg * 0.95 + rms * 0.05;
+    const now = millis();
+    if (rms > energyAvg * onsetRatio && rms > ONSET_MIN && now - lastOnsetTime > ONSET_COOLDOWN) {
+      lastOnsetTime = now;
+      advanceCarousels();
+    }
+  }
+
   for (let q = 0; q < quads.length; q++) {
     const quad = quads[q];
 
@@ -509,7 +533,9 @@ function draw() {
       quad.sourceEl.drawingContext.drawImage(quad.sourceVideo, 0, 0, 512, 512);
     }
 
-    if (quad.sourceEl && quad.sourceType !== 'hydra') {
+    if (quad.sourceType === 'carousel' && quad.carousel && quad.carousel.length > 0) {
+      texture(quad.carousel[quad.carouselIndex].img);
+    } else if (quad.sourceEl && quad.sourceType !== 'hydra') {
       texture(quad.sourceEl);
     } else {
       texture(hc);
@@ -647,6 +673,10 @@ function addQuad() {
 
 function clearQuadSource(index) {
   const quad = quads[index];
+  if (quad.sourceType === 'carousel') {
+    quad.carousel = [];
+    quad.carouselIndex = 0;
+  }
   if (quad.sourceUrl) {
     if (!quad.sourceUrl.startsWith('http')) URL.revokeObjectURL(quad.sourceUrl);
     quad.sourceUrl = null;
@@ -684,7 +714,11 @@ function changeQuadSource(index, type) {
   clearQuadSource(index);
   quads[index].sourceType = type;
   quads[index].sourceEl = null;
-  if (type === 'camera') {
+  if (type === 'carousel') {
+    if (!quads[index].carousel) quads[index].carousel = [];
+    if (quads[index].carouselIndex == null) quads[index].carouselIndex = 0;
+    renderQuadList();
+  } else if (type === 'camera') {
     startCamera(index);
   } else {
     renderQuadList();
@@ -784,6 +818,88 @@ function loadQuadSourceFromUrl(index, url) {
   saveToLocalStorage();
 }
 
+function addCarouselImage(index) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.multiple = true;
+  input.onchange = (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    if (!quads[index].carousel) quads[index].carousel = [];
+    let loaded = 0;
+    files.forEach(file => {
+      const url = URL.createObjectURL(file);
+      loadImage(url, (img) => {
+        quads[index].carousel.push({ img, name: file.name });
+        loaded++;
+        if (loaded === files.length) renderQuadList();
+      });
+    });
+  };
+  input.click();
+}
+
+function removeCarouselImage(quadIndex, imgIndex) {
+  const q = quads[quadIndex];
+  if (!q.carousel) return;
+  q.carousel.splice(imgIndex, 1);
+  if (q.carouselIndex >= q.carousel.length) q.carouselIndex = Math.max(0, q.carousel.length - 1);
+  renderQuadList();
+}
+
+function advanceCarousels() {
+  quads.forEach(q => {
+    if (q.sourceType === 'carousel' && q.carousel && q.carousel.length > 0) {
+      q.carouselIndex = (q.carouselIndex + 1) % q.carousel.length;
+    }
+  });
+}
+
+function toggleMic() {
+  if (micActive) {
+    stopMic();
+  } else {
+    initMic();
+  }
+}
+
+function initMic() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert('Tu navegador no soporta acceso al micrófono.');
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+    .then(stream => {
+      micContext = new (window.AudioContext || window.webkitAudioContext)();
+      const source = micContext.createMediaStreamSource(stream);
+      micAnalyser = micContext.createAnalyser();
+      micAnalyser.fftSize = 1024;
+      micBuffer = new Float32Array(micAnalyser.fftSize);
+      source.connect(micAnalyser);
+      micActive = true;
+      energyAvg = 0;
+      lastOnsetTime = 0;
+      document.getElementById('mic-btn')?.classList.add('active');
+      document.getElementById('mic-sensitivity').style.display = 'block';
+    })
+    .catch(err => {
+      const msg = err.name === 'NotAllowedError' ? 'Permiso de micrófono denegado.'
+        : err.name === 'NotFoundError' ? 'No se encontró micrófono.'
+        : 'No se pudo acceder al micrófono.';
+      alert(msg);
+    });
+}
+
+function stopMic() {
+  if (micContext) { micContext.close(); micContext = null; }
+  micAnalyser = null;
+  micBuffer = null;
+  micActive = false;
+  document.getElementById('mic-btn')?.classList.remove('active');
+  document.getElementById('mic-sensitivity').style.display = 'none';
+}
+
 function renderQuadList() {
   const container = document.getElementById("quad-list");
   if (!container) return;
@@ -804,19 +920,33 @@ function renderQuadList() {
         </div>`
       : '';
 
+    const carousel = q.carousel || [];
+    const carouselSection = q.sourceType === 'carousel'
+      ? `<div class="carousel-list">
+          ${carousel.map((item, j) => `
+            <div class="carousel-img-row${j === q.carouselIndex ? ' active' : ''}">
+              <span class="carousel-img-name">${j + 1} · ${item.name}</span>
+              <button onclick="removeCarouselImage(${i},${j})">✕</button>
+            </div>`).join('')}
+          <button class="carousel-add-btn" onclick="addCarouselImage(${i})">+ imagen</button>
+        </div>`
+      : '';
+
     div.innerHTML = `
       <span class="quad-label">${q.kind === 'freeform' ? 'Libre' : 'Quad'} ${i}</span>
       <div class="quad-controls">
         <select onchange="changeQuadSource(${i}, this.value)">
-          <option value="hydra"  ${q.sourceType === 'hydra'  ? 'selected' : ''}>Hydra</option>
-          <option value="video"  ${q.sourceType === 'video'  ? 'selected' : ''}>Video</option>
-          <option value="image"  ${q.sourceType === 'image'  ? 'selected' : ''}>Imagen</option>
-          <option value="camera" ${q.sourceType === 'camera' ? 'selected' : ''}>Cámara</option>
+          <option value="hydra"     ${q.sourceType === 'hydra'     ? 'selected' : ''}>Hydra</option>
+          <option value="video"     ${q.sourceType === 'video'     ? 'selected' : ''}>Video</option>
+          <option value="image"     ${q.sourceType === 'image'     ? 'selected' : ''}>Imagen</option>
+          <option value="camera"    ${q.sourceType === 'camera'    ? 'selected' : ''}>Cámara</option>
+          <option value="carousel"  ${q.sourceType === 'carousel'  ? 'selected' : ''}>Carrusel</option>
         </select>
         ${fileBtn}
         <button onclick="deleteQuad(${i})">✕</button>
       </div>
       ${urlRow}
+      ${carouselSection}
     `;
 
     container.appendChild(div);
@@ -992,6 +1122,17 @@ function deleteScene(index) {
   if (currentSceneIndex >= scenes.length) currentSceneIndex = scenes.length - 1;
   else if (index < currentSceneIndex) currentSceneIndex--;
   _applySceneData(scenes[currentSceneIndex]);
+  saveToLocalStorage();
+  renderSceneStrip();
+}
+
+function deleteAllScenes() {
+  if (!confirm('¿Eliminar todas las escenas?')) return;
+  if (isPlaying) stopPlayback();
+  snapshotCurrentScene();
+  const current = scenes[currentSceneIndex];
+  scenes = [{ id: 1, duration_s: current.duration_s, hydraCode: current.hydraCode, quads: current.quads }];
+  currentSceneIndex = 0;
   saveToLocalStorage();
   renderSceneStrip();
 }
