@@ -68,6 +68,8 @@ document.addEventListener('DOMContentLoaded', () => {
 var hydra = new Hydra({ canvas: document.getElementById("myCanvas") });
 // p5 overwrites window.noise at DOMContentLoaded; capture Hydra's version first
 var _hydraNoise = window.noise;
+// Capture output references before anything overwrites them
+const HYDRA_OUTPUTS = [o0, o1, o2, o3];
 
 osc(1, 1, 1).out();
 
@@ -157,7 +159,7 @@ function saveSession() {
               : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: srcType };
             if (srcUrl) data.sourceUrl = srcUrl;
             if (imageData) data.imageData = imageData;
-            if (q.sourceType === 'hydra') data.hydraCode = q.hydraCode || '';
+            if (q.sourceType === 'hydra') { data.hydraCode = q.hydraCode || ''; data.hydraOutput = q.hydraOutput ?? 0; }
             return data;
           })
         : s.quads
@@ -211,16 +213,25 @@ function applySession(session) {
 
     const sceneData = scenes[currentSceneIndex];
     let pending = 0;
+    hydraSlots = [false, false, false, false];
+    let _aSlot = 0;
     const legacyCode = sceneData.hydraCode || '';
     (sceneData.quads || []).forEach((qData, i) => {
       const srcType = qData.sourceType === 'camera' ? 'camera' : (qData.sourceType || 'hydra');
       const hydraCode = qData.hydraCode != null ? qData.hydraCode : (srcType === 'hydra' ? legacyCode : '');
+      let hydraOutput = null;
+      if (srcType === 'hydra') {
+        const stored = qData.hydraOutput ?? -1;
+        if (stored >= 0 && stored < 4 && !hydraSlots[stored]) { hydraOutput = stored; }
+        else { while (_aSlot < 4 && hydraSlots[_aSlot]) _aSlot++; hydraOutput = _aSlot < 4 ? _aSlot : 0; }
+        hydraSlots[hydraOutput] = true;
+      }
       let quad;
       if (qData.kind === 'freeform') {
-        quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode };
+        quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
       } else {
         const pts = qData.points || qData;
-        quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode };
+        quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
         buildTessCache(quad);
       }
       quads.push(quad);
@@ -411,6 +422,8 @@ let sceneStartTime = 0;
 // --- P5 ---
 
 let hc;
+let hydraSlots = [false, false, false, false];
+let hydraCanvases = [];  // p5.Graphics (2D) per slot — object identity prevents p5 texture cache collisions
 let quads = [];
 let selected = { quad: -1, vert: -1 };
 let drawingMode = false;
@@ -418,6 +431,19 @@ let drawStart = null;
 let drawCurrent = null;
 let freeformMode = false;
 let freeformVerts = [];
+
+// --- HYDRA SLOTS ---
+
+function assignHydraSlot() {
+  for (let i = 0; i < 4; i++) {
+    if (!hydraSlots[i]) { hydraSlots[i] = true; return i; }
+  }
+  return 0; // fallback: all taken, share slot 0
+}
+
+function releaseHydraSlot(slot) {
+  if (slot != null && slot >= 0 && slot < 4) hydraSlots[slot] = false;
+}
 
 // --- DETECCIÓN DE APLAUSO ---
 let micContext = null;
@@ -455,13 +481,17 @@ function cancelFreeform() {
 
 function finalizeFreeform() {
   if (freeformVerts.length < 3) { cancelFreeform(); return; }
+  const _slotFF = assignHydraSlot();
+  const _codeFF = `osc(1, 1, 1).out(o${_slotFF})`;
+  evalHydra(_codeFF);
   const shape = {
     kind: 'freeform',
     vertices: freeformVerts.map(v => createVector(v.x, v.y)),
     sourceType: 'hydra',
     sourceEl: null,
     sourceUrl: null,
-    hydraCode: ''
+    hydraCode: _codeFF,
+    hydraOutput: _slotFF
   };
   quads.push(shape);
   undoStack.length = 0;
@@ -500,7 +530,10 @@ function finalizeQuad() {
     }
   }
 
-  const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null, hydraCode: '' };
+  const _slotQ = assignHydraSlot();
+  const _codeQ = `osc(1, 1, 1).out(o${_slotQ})`;
+  evalHydra(_codeQ);
+  const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null, hydraCode: _codeQ, hydraOutput: _slotQ };
   buildTessCache(newQuad);
   quads.push(newQuad);
   undoStack.length = 0;
@@ -519,6 +552,8 @@ function setup() {
   hc = select("#myCanvas");
   hc.hide();
   window.noise = _hydraNoise; // restore after p5 overwrote it
+  for (let i = 0; i < 4; i++) hydraCanvases.push(createGraphics(512, 512));
+
   _applySceneData(scenes[currentSceneIndex]);
   renderSceneStrip();
 }
@@ -526,6 +561,7 @@ function setup() {
 function draw() {
   background(0);
   textureMode(NORMAL);
+
 
   if (micActive && micAnalyser) {
     micAnalyser.getFloatTimeDomainData(micBuffer);
@@ -549,7 +585,15 @@ function draw() {
 
     if (quad.sourceType === 'carousel' && quad.carousel && quad.carousel.length > 0) {
       texture(quad.carousel[quad.carouselIndex].img);
-    } else if (quad.sourceEl && quad.sourceType !== 'hydra') {
+    } else if (quad.sourceType === 'hydra') {
+      const _slot = quad.hydraOutput ?? 0;
+      hydra.renderFbo({
+        tex0: hydra.o[_slot].getCurrent(),
+        resolution: [hc.elt.width, hc.elt.height]
+      });
+      hydraCanvases[_slot].drawingContext.drawImage(hc.elt, 0, 0, 512, 512);
+      texture(hydraCanvases[_slot]);
+    } else if (quad.sourceEl) {
       texture(quad.sourceEl);
     } else {
       texture(hc);
@@ -678,7 +722,10 @@ function addQuad() {
     }
   }
 
-  const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null, hydraCode: '' };
+  const _slotF = assignHydraSlot();
+  const _codeF = `osc(1, 1, 1).out(o${_slotF})`;
+  evalHydra(_codeF);
+  const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null, hydraCode: _codeF, hydraOutput: _slotF };
   buildTessCache(newQuad);
   quads.push(newQuad);
   renderQuadList();
@@ -687,6 +734,10 @@ function addQuad() {
 
 function clearQuadSource(index) {
   const quad = quads[index];
+  if (quad.sourceType === 'hydra') {
+    releaseHydraSlot(quad.hydraOutput);
+    quad.hydraOutput = null;
+  }
   if (quad.sourceType === 'carousel') {
     quad.carousel = [];
     quad.carouselIndex = 0;
@@ -729,7 +780,12 @@ function changeQuadSource(index, type) {
   quads[index].sourceType = type;
   quads[index].sourceEl = null;
   if (type === 'hydra') {
-    if (!quads[index].hydraCode) quads[index].hydraCode = '';
+    const slot = assignHydraSlot();
+    quads[index].hydraOutput = slot;
+    if (!quads[index].hydraCode) {
+      quads[index].hydraCode = `osc(1, 1, 1).out(o${slot})`;
+      evalHydra(quads[index].hydraCode);
+    }
     renderQuadList();
   } else if (type === 'carousel') {
     if (!quads[index].carousel) quads[index].carousel = [];
@@ -964,7 +1020,7 @@ function renderQuadList() {
       : '';
 
     div.innerHTML = `
-      <span class="quad-label">${q.kind === 'freeform' ? 'Libre' : 'Quad'} ${i}</span>
+      <span class="quad-label">${q.kind === 'freeform' ? 'Libre' : 'Quad'} ${i}${q.sourceType === 'hydra' && q.hydraOutput != null ? ` — o${q.hydraOutput}` : ''}</span>
       <div class="quad-controls">
         <select onchange="changeQuadSource(${i}, this.value)">
           <option value="hydra"     ${q.sourceType === 'hydra'     ? 'selected' : ''}>Hydra</option>
@@ -1085,7 +1141,7 @@ function snapshotCurrentScene() {
       ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType }
       : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType };
     if (srcUrl) data.sourceUrl = srcUrl;
-    if (q.sourceType === 'hydra') data.hydraCode = q.hydraCode || '';
+    if (q.sourceType === 'hydra') { data.hydraCode = q.hydraCode || ''; data.hydraOutput = q.hydraOutput ?? 0; }
     return data;
   });
 }
@@ -1093,15 +1149,28 @@ function snapshotCurrentScene() {
 function _applySceneData(sceneData) {
   quads.forEach((_, i) => clearQuadSource(i));
   quads = [];
-  // Migrate: if scene has a global hydraCode but no per-quad codes, use it for all hydra quads
+  hydraSlots = [false, false, false, false];
   const legacyCode = sceneData.hydraCode || '';
+  let autoSlot = 0;
   quads = (sceneData.quads || []).map(q => {
     const srcType = q.sourceType === 'camera' ? 'camera' : (q.sourceType || 'hydra');
     const hydraCode = q.hydraCode != null ? q.hydraCode : (srcType === 'hydra' ? legacyCode : '');
-    if (q.kind === 'freeform') {
-      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode };
+    let hydraOutput = null;
+    if (srcType === 'hydra') {
+      // Respect stored slot if free, otherwise assign next available
+      const stored = q.hydraOutput ?? -1;
+      if (stored >= 0 && stored < 4 && !hydraSlots[stored]) {
+        hydraOutput = stored;
+      } else {
+        while (autoSlot < 4 && hydraSlots[autoSlot]) autoSlot++;
+        hydraOutput = autoSlot < 4 ? autoSlot : 0;
+      }
+      hydraSlots[hydraOutput] = true;
     }
-    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode };
+    if (q.kind === 'freeform') {
+      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
+    }
+    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
     buildTessCache(quad);
     return quad;
   });
@@ -1139,8 +1208,8 @@ function addScene() {
     hydraCode: current.hydraCode || '',
     quads: (current.quads || []).map(q =>
       q.kind === 'freeform'
-        ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType, hydraCode: q.hydraCode || '' }
-        : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType, hydraCode: q.hydraCode || '' }
+        ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType, hydraCode: q.hydraCode || '', hydraOutput: q.hydraOutput ?? null }
+        : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType, hydraCode: q.hydraCode || '', hydraOutput: q.hydraOutput ?? null }
     )
   });
   currentSceneIndex = scenes.length - 1;
