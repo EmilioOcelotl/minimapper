@@ -213,8 +213,7 @@ function applySession(session) {
 
     const sceneData = scenes[currentSceneIndex];
     let pending = 0;
-    hydraSlots = [false, false, false, false];
-    let _aSlot = 0;
+    hydraSlots = [0, 0, 0, 0];
     const legacyCode = sceneData.hydraCode || '';
     (sceneData.quads || []).forEach((qData, i) => {
       const srcType = qData.sourceType === 'camera' ? 'camera' : (qData.sourceType || 'hydra');
@@ -222,9 +221,8 @@ function applySession(session) {
       let hydraOutput = null;
       if (srcType === 'hydra') {
         const stored = qData.hydraOutput ?? -1;
-        if (stored >= 0 && stored < 4 && !hydraSlots[stored]) { hydraOutput = stored; }
-        else { while (_aSlot < 4 && hydraSlots[_aSlot]) _aSlot++; hydraOutput = _aSlot < 4 ? _aSlot : 0; }
-        hydraSlots[hydraOutput] = true;
+        hydraOutput = (stored >= 0 && stored < 4) ? stored : hydraSlots.indexOf(Math.min(...hydraSlots));
+        hydraSlots[hydraOutput]++;
       }
       let quad;
       if (qData.kind === 'freeform') {
@@ -422,7 +420,7 @@ let sceneStartTime = 0;
 // --- P5 ---
 
 let hc;
-let hydraSlots = [false, false, false, false];
+let hydraSlots = [0, 0, 0, 0];
 let hydraCanvases = [];  // p5.Graphics (2D) per slot — object identity prevents p5 texture cache collisions
 let quads = [];
 let selected = { quad: -1, vert: -1 };
@@ -436,13 +434,19 @@ let freeformVerts = [];
 
 function assignHydraSlot() {
   for (let i = 0; i < 4; i++) {
-    if (!hydraSlots[i]) { hydraSlots[i] = true; return i; }
+    if (hydraSlots[i] === 0) { hydraSlots[i]++; return i; }
   }
-  return 0; // fallback: all taken, share slot 0
+  // All slots taken: assign the least-used one (distributes quads 5+ across outputs)
+  let minSlot = 0;
+  for (let i = 1; i < 4; i++) {
+    if (hydraSlots[i] < hydraSlots[minSlot]) minSlot = i;
+  }
+  hydraSlots[minSlot]++;
+  return minSlot;
 }
 
 function releaseHydraSlot(slot) {
-  if (slot != null && slot >= 0 && slot < 4) hydraSlots[slot] = false;
+  if (slot != null && slot >= 0 && slot < 4) hydraSlots[slot] = Math.max(0, hydraSlots[slot] - 1);
 }
 
 // --- DETECCIÓN DE APLAUSO ---
@@ -1157,23 +1161,16 @@ function snapshotCurrentScene() {
 function _applySceneData(sceneData) {
   quads.forEach((_, i) => clearQuadSource(i));
   quads = [];
-  hydraSlots = [false, false, false, false];
+  hydraSlots = [0, 0, 0, 0];
   const legacyCode = sceneData.hydraCode || '';
-  let autoSlot = 0;
   quads = (sceneData.quads || []).map(q => {
     const srcType = q.sourceType === 'camera' ? 'camera' : (q.sourceType || 'hydra');
     const hydraCode = q.hydraCode != null ? q.hydraCode : (srcType === 'hydra' ? legacyCode : '');
     let hydraOutput = null;
     if (srcType === 'hydra') {
-      // Respect stored slot if free, otherwise assign next available
       const stored = q.hydraOutput ?? -1;
-      if (stored >= 0 && stored < 4 && !hydraSlots[stored]) {
-        hydraOutput = stored;
-      } else {
-        while (autoSlot < 4 && hydraSlots[autoSlot]) autoSlot++;
-        hydraOutput = autoSlot < 4 ? autoSlot : 0;
-      }
-      hydraSlots[hydraOutput] = true;
+      hydraOutput = (stored >= 0 && stored < 4) ? stored : hydraSlots.indexOf(Math.min(...hydraSlots));
+      hydraSlots[hydraOutput]++;
     }
     if (q.kind === 'freeform') {
       return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
