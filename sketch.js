@@ -122,6 +122,17 @@ function runQuadHydra(index) {
     if (statusEl) { statusEl.textContent = '✗'; statusEl.className = 'status-error'; clearTimeout(statusEl._t); statusEl._t = setTimeout(() => { statusEl.textContent = ''; statusEl.className = ''; }, 3000); }
     return;
   }
+  // Sync code to all quads sharing the same hydra output slot
+  const slot = quads[index]?.hydraOutput;
+  if (slot != null) {
+    quads.forEach((q, i) => {
+      if (i !== index && q.sourceType === 'hydra' && q.hydraOutput === slot) {
+        q.hydraCode = code;
+        const ta = document.getElementById(`hydra-code-${i}`);
+        if (ta) ta.value = code;
+      }
+    });
+  }
   if (statusEl) { statusEl.textContent = '✓'; statusEl.className = 'status-ok'; clearTimeout(statusEl._t); statusEl._t = setTimeout(() => { statusEl.textContent = ''; statusEl.className = ''; }, 3000); }
   saveToLocalStorage();
 }
