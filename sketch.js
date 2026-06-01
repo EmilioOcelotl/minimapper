@@ -23,10 +23,7 @@ function toggleEditMode() {
   } else {
     panel.classList.remove('visible');
     btn.classList.add('presentation');
-    const infoPanel = document.getElementById('info-panel');
-    if (infoPanel.classList.contains('visible')) {
-      infoPanel.classList.remove('visible');
-    }
+    document.getElementById('welcome').classList.remove('visible');
     infoBtn.classList.remove('visible');
   }
 }
@@ -38,14 +35,29 @@ function togglePanelCollapse() {
   btn.textContent = ui.classList.contains('collapsed') ? '›' : '‹';
 }
 
-function toggleInfoPanel() {
-  const infoPanel = document.getElementById('info-panel');
-  infoPanel.classList.toggle('visible');
+// Modal de bienvenida / ayuda. En la primera visita se muestra solo (marca en
+// localStorage); al cerrarlo se revela el entorno de trabajo. Después, el
+// botón ? lo reabre sin cambiar de modo.
+let pendingFirstReveal = false;
+
+function openWelcome() {
+  document.getElementById('welcome').classList.add('visible');
+}
+
+function closeWelcome() {
+  document.getElementById('welcome').classList.remove('visible');
+  if (pendingFirstReveal) {
+    pendingFirstReveal = false;
+    try { localStorage.setItem('minimapper_welcomed', '1'); } catch (e) {}
+    if (!uiVisible) toggleEditMode();   // revela el entorno de trabajo
+  }
 }
 
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'H') toggleEditMode();
   if (e.key === 'Escape') {
+    const welcome = document.getElementById('welcome');
+    if (welcome && welcome.classList.contains('visible')) { closeWelcome(); return; }
     if (freeformMode) cancelFreeform();
     else if (drawingMode) cancelDrawing();
     else if (isPlaying) { stopPlayback(); if (!uiVisible) toggleEditMode(); }
@@ -61,6 +73,12 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('toggle-btn').classList.add('presentation');
   document.getElementById('info-btn').classList.remove('visible');
   loadFromLocalStorage();
+  let welcomed = false;
+  try { welcomed = !!localStorage.getItem('minimapper_welcomed'); } catch (e) {}
+  if (!welcomed) {
+    pendingFirstReveal = true;
+    openWelcome();
+  }
 });
 
 // --- HYDRA ---

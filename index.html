@@ -21,23 +21,28 @@
   <div id="hint">← da clic aquí para iniciar</div>
   
   <!-- Botón de información (solo visible en modo edición) -->
-  <div id="info-btn" onclick="toggleInfoPanel()" title="Instrucciones">
+  <div id="info-btn" onclick="openWelcome()" title="Instrucciones">
     <span id="info-icon">?</span>
   </div>
 
-  <!-- Panel de instrucciones -->
-  <div id="info-panel">
-    <button class="close-info" onclick="toggleInfoPanel()">×</button>
-    <h3>Instrucciones</h3>
-    <p><em>MiniMapper funciona mejor en Chrome o Firefox.</em></p>
-    <p><strong>Hydra:</strong> Cada superficie tiene su propio editor de código Hydra y output independiente (o0–o3). CTRL+Enter o ▶ para ejecutar</p>
-    <p><strong>Fuente:</strong> Cada superficie puede usar Hydra, Video, Imagen, Cámara o Carrusel — elige con el selector. El carrusel avanza con detección de aplauso (botón <em>mic</em> en la sección de carrusel)</p>
-    <p><strong>Quads:</strong> Clic en + Quad, luego dibuja el área en el canvas con clic y arrastre. ESC cancela</p>
-    <p><strong>Formas libres:</strong> Clic en + Libre, luego clic para colocar cada vértice. Cierra con doble clic en cualquier parte, o clic en el primer vértice (se vuelve verde). Mínimo 3 vértices. ESC cancela</p>
-    <p><strong>Mapping:</strong> Arrastra los puntos de control para deformar la superficie. Las esquinas (rojo) están sobre la superficie; los puntos intermedios (amarillo) curvan los bordes. Mantén <strong>M</strong> al hacer clic en cualquier punto para mover toda la superficie en conjunto</p>
-    <p><strong>Atajos:</strong> CTRL + SHIFT + H para mostrar/ocultar la UI · ESC para silenciar o cancelar · CTRL + Z para deshacer · M + clic y arrastra para mover toda la superficie</p>
-    <p><strong>Auto-guardado:</strong> El código y los vértices se guardan automáticamente (las fuentes de video/imagen se deben recargar al abrir)</p>
-    <p><strong>Sesión:</strong> "↓ Sesión" descarga un archivo JSON con el estado completo (imágenes incluidas). "↑ Sesión" lo restaura — los videos y la cámara se deben recargar manualmente</p>
+  <!-- Modal de bienvenida / ayuda -->
+  <div id="welcome">
+    <div id="welcome-box">
+      <button class="close-welcome" onclick="closeWelcome()" title="Cerrar">×</button>
+      <h2>MiniMapper</h2>
+      <p class="welcome-lead">Herramienta experimental de <strong>videomapping generativo</strong> en tiempo real, directamente en el navegador. Combina <a href="https://hydra.ojack.xyz/" target="_blank" rel="noopener">Hydra</a> (síntesis visual live-coding) con p5.js para proyectar visuales sobre superficies deformables.</p>
+      <p><em>Funciona mejor en Chrome o Firefox.</em></p>
+      <h3>Instrucciones</h3>
+      <p><strong>Hydra:</strong> Cada superficie tiene su propio editor de código Hydra y output independiente (o0–o3). CTRL+Enter o ▶ para ejecutar</p>
+      <p><strong>Fuente:</strong> Cada superficie puede usar Hydra, Video, Imagen, Cámara o Carrusel — elige con el selector. El carrusel avanza con detección de aplauso (botón <em>mic</em> en la sección de carrusel)</p>
+      <p><strong>Quads:</strong> Clic en + Quad, luego dibuja el área en el canvas con clic y arrastre. ESC cancela</p>
+      <p><strong>Formas libres:</strong> Clic en + Libre, luego clic para colocar cada vértice. Cierra con doble clic en cualquier parte, o clic en el primer vértice (se vuelve verde). Mínimo 3 vértices. ESC cancela</p>
+      <p><strong>Mapping:</strong> Arrastra los puntos de control para deformar la superficie. Las esquinas (rojo) están sobre la superficie; los puntos intermedios (amarillo) curvan los bordes. Mantén <strong>M</strong> al hacer clic en cualquier punto para mover toda la superficie en conjunto</p>
+      <p><strong>Atajos:</strong> CTRL + SHIFT + H para mostrar/ocultar la UI · ESC para silenciar o cancelar · CTRL + Z para deshacer · M + clic y arrastra para mover toda la superficie</p>
+      <p><strong>Auto-guardado:</strong> El código y los vértices se guardan automáticamente (las fuentes de video/imagen se deben recargar al abrir)</p>
+      <p><strong>Sesión:</strong> "↓ Sesión" descarga un archivo JSON con el estado completo (imágenes incluidas). "↑ Sesión" lo restaura — los videos y la cámara se deben recargar manualmente</p>
+      <button id="welcome-start" onclick="closeWelcome()">Comenzar →</button>
+    </div>
   </div>
 
   <div id="ui">
