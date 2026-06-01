@@ -81,6 +81,19 @@
 
   <script src="sketch.js"></script>
 
+  <!-- Service Worker: caché offline. Solo se registra servido por http(s);
+       desde file:// (doble clic en index.html) no hace nada y la app
+       funciona igual, pero sin caché offline. -->
+  <script>
+    if ('serviceWorker' in navigator &&
+        (location.protocol === 'https:' || location.protocol === 'http:')) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js')
+          .catch((err) => console.warn('Service Worker no registrado:', err));
+      });
+    }
+  </script>
+
 </body>
 
 </html>
