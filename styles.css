@@ -419,22 +419,6 @@ label {
   color: white !important;
 }
 
-.hydra-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.hydra-actions button {
-  margin-top: 0;
-}
-
-#run-status {
-  font-size: 11px;
-  transition: opacity 0.3s;
-}
-
 .status-ok    { color: #5c5; }
 .status-error { color: #f55; }
 

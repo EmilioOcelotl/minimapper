@@ -111,27 +111,6 @@ function evalHydra(code) {
   return null;
 }
 
-function setRunStatus(ok, msg) {
-  const el = document.getElementById("run-status");
-  if (!el) return;
-  el.textContent = msg || (ok ? "✓" : "✗");
-  el.className = ok ? "status-ok" : "status-error";
-  clearTimeout(el._t);
-  el._t = setTimeout(() => { el.textContent = ""; el.className = ""; }, 3000);
-}
-
-function runHydra() {
-  const code = document.getElementById("code").value;
-  const blocked = evalHydra(code);
-  if (blocked) {
-    setRunStatus(false, `✗ bloqueado`);
-    console.warn(`Hydra: "${blocked}" no está permitido`);
-    return;
-  }
-  setRunStatus(true);
-  saveToLocalStorage();
-}
-
 function runQuadHydra(index) {
   const code = quads[index]?.hydraCode || '';
   const statusEl = document.getElementById(`hydra-status-${index}`);
@@ -158,8 +137,6 @@ function runQuadHydra(index) {
 function stopHydra() {
   try {
     hush();
-    const el = document.getElementById("run-status");
-    if (el) { el.textContent = ""; el.className = ""; }
   } catch (e) {
     console.log("Error al ejecutar hush:", e);
   }
@@ -225,102 +202,77 @@ function loadSession() {
   input.click();
 }
 
+// Una sesión v1 es una sola escena con hydraCode global. Se normaliza a la forma
+// v2 para que la restauración tenga un solo camino.
+function normalizeSession(session) {
+  if (session.version === 2 && session.scenes && session.scenes.length > 0) {
+    return {
+      scenes: session.scenes.map(s => ({
+        id: s.id,
+        duration_s: s.duration_s || 30,
+        hydraCode: s.hydraCode || '',
+        quads: s.quads || []
+      })),
+      currentSceneIndex: session.currentSceneIndex || 0,
+      playbackMode: session.playbackMode || 'once'
+    };
+  }
+  return {
+    scenes: [{ id: 1, duration_s: 30, hydraCode: session.hydraCode || '', quads: session.quads || [] }],
+    currentSceneIndex: 0,
+    playbackMode: 'once'
+  };
+}
+
 function applySession(session) {
   if (isPlaying) stopPlayback();
   quads.forEach((_, i) => clearQuadSource(i));
   quads = [];
 
-  if (session.version === 2 && session.scenes && session.scenes.length > 0) {
-    scenes = session.scenes.map(s => ({
-      id: s.id,
-      duration_s: s.duration_s || 30,
-      hydraCode: s.hydraCode || '',
-      quads: s.quads || []
-    }));
-    currentSceneIndex = Math.min(session.currentSceneIndex || 0, scenes.length - 1);
-    playbackMode = session.playbackMode || 'once';
+  const normalized = normalizeSession(session);
+  scenes = normalized.scenes;
+  currentSceneIndex = Math.min(normalized.currentSceneIndex, scenes.length - 1);
+  playbackMode = normalized.playbackMode;
 
-    const sceneData = scenes[currentSceneIndex];
-    let pending = 0;
-    hydraSlots = [0, 0, 0, 0];
-    const legacyCode = sceneData.hydraCode || '';
-    (sceneData.quads || []).forEach((qData, i) => {
-      const srcType = qData.sourceType === 'camera' ? 'camera' : (qData.sourceType || 'hydra');
-      const hydraCode = qData.hydraCode != null ? qData.hydraCode : (srcType === 'hydra' ? legacyCode : '');
-      let hydraOutput = null;
-      if (srcType === 'hydra') {
-        const stored = qData.hydraOutput ?? -1;
-        hydraOutput = (stored >= 0 && stored < 4) ? stored : hydraSlots.indexOf(Math.min(...hydraSlots));
-        hydraSlots[hydraOutput]++;
-      }
-      let quad;
-      if (qData.kind === 'freeform') {
-        quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
-      } else {
-        const pts = qData.points || qData;
-        quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
-        buildTessCache(quad);
-      }
-      quads.push(quad);
-      if (qData.sourceUrl && qData.sourceUrl.startsWith('http')) {
-        loadQuadSourceFromUrl(i, qData.sourceUrl);
-      } else if (qData.sourceType === 'image' && qData.imageData) {
-        pending++;
-        loadImage(qData.imageData, (img) => {
-          quads[i].sourceType = 'image';
-          quads[i].sourceEl = img;
-          pending--;
-          if (pending === 0) { renderQuadList(); saveToLocalStorage(); }
-        });
-      } else if (srcType === 'hydra' && hydraCode) {
-        evalHydra(hydraCode);
-      }
-    });
-    quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
-    undoStack.length = 0;
-    if (pending === 0) { renderQuadList(); saveToLocalStorage(); }
-    renderSceneStrip();
-  } else {
-    // Formato anterior (versión 1)
-    if (session.hydraCode) {
-      document.getElementById("code").value = session.hydraCode;
-      evalHydra(session.hydraCode);
+  const sceneData = scenes[currentSceneIndex];
+  let pending = 0;
+  hydraSlots = [0, 0, 0, 0];
+  const legacyCode = sceneData.hydraCode || '';
+  (sceneData.quads || []).forEach((qData, i) => {
+    const srcType = qData.sourceType === 'camera' ? 'camera' : (qData.sourceType || 'hydra');
+    const hydraCode = qData.hydraCode != null ? qData.hydraCode : (srcType === 'hydra' ? legacyCode : '');
+    let hydraOutput = null;
+    if (srcType === 'hydra') {
+      const stored = qData.hydraOutput ?? -1;
+      hydraOutput = (stored >= 0 && stored < 4) ? stored : hydraSlots.indexOf(Math.min(...hydraSlots));
+      hydraSlots[hydraOutput]++;
     }
-    scenes = [{ id: 1, duration_s: 30, hydraCode: session.hydraCode || '', quads: [] }];
-    currentSceneIndex = 0;
-
-    if (!session.quads || session.quads.length === 0) {
-      renderQuadList(); saveToLocalStorage(); renderSceneStrip();
-      return;
+    let quad;
+    if (qData.kind === 'freeform') {
+      quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
+    } else {
+      const pts = qData.points || qData;
+      quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
+      buildTessCache(quad);
     }
-
-    let pending = 0;
-    session.quads.forEach((qData, i) => {
-      const srcType = qData.sourceType === 'camera' ? 'camera' : 'hydra';
-      let quad;
-      if (qData.kind === 'freeform') {
-        quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null };
-      } else {
-        const pointsData = qData.points || qData;
-        quad = { kind: 'quad', points: pointsData.map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null };
-        buildTessCache(quad);
-      }
-      quads.push(quad);
-      if (qData.sourceUrl && qData.sourceUrl.startsWith('http')) {
-        loadQuadSourceFromUrl(i, qData.sourceUrl);
-      } else if (qData.sourceType === 'image' && qData.imageData) {
-        pending++;
-        loadImage(qData.imageData, (img) => {
-          quads[i].sourceType = 'image';
-          quads[i].sourceEl = img;
-          pending--;
-          if (pending === 0) { renderQuadList(); saveToLocalStorage(); renderSceneStrip(); }
-        });
-      }
-    });
-    quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
-    if (pending === 0) { renderQuadList(); saveToLocalStorage(); renderSceneStrip(); }
-  }
+    quads.push(quad);
+    if (qData.sourceUrl && qData.sourceUrl.startsWith('http')) {
+      loadQuadSourceFromUrl(i, qData.sourceUrl);
+    } else if (srcType === 'image' && qData.imageData) {
+      pending++;
+      loadImage(qData.imageData, (img) => {
+        quads[i].sourceEl = img;
+        pending--;
+        if (pending === 0) { renderQuadList(); saveToLocalStorage(); }
+      });
+    } else if (srcType === 'hydra' && hydraCode) {
+      evalHydra(hydraCode);
+    }
+  });
+  quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
+  undoStack.length = 0;
+  if (pending === 0) { renderQuadList(); saveToLocalStorage(); }
+  renderSceneStrip();
 }
 
 // --- LOCAL STORAGE ---
@@ -738,31 +690,6 @@ function draw() {
 
     pop();
   }
-}
-
-function addQuad() {
-  let size = 200;
-  let ox = random(-60, 60);
-  let oy = random(-60, 60);
-  let points = [];
-
-  for (let y = 0; y < 3; y++) {
-    for (let x = 0; x < 3; x++) {
-      points.push(createVector(
-        map(x, 0, 2, -size, size) + ox,
-        map(y, 0, 2, -size, size) + oy
-      ));
-    }
-  }
-
-  const _slotF = assignHydraSlot();
-  const _codeF = `osc(1, 1, 1).out(o${_slotF})`;
-  evalHydra(_codeF);
-  const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null, hydraCode: _codeF, hydraOutput: _slotF };
-  buildTessCache(newQuad);
-  quads.push(newQuad);
-  renderQuadList();
-  saveToLocalStorage();
 }
 
 function clearQuadSource(index) {
