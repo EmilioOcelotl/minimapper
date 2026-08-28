@@ -856,3 +856,66 @@ select option {
 #playback-hud.visible {
   opacity: 1;
 }
+/* --- Aviso de contexto WebGL perdido --- */
+#glcrash {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.9);
+  backdrop-filter: blur(8px);
+}
+
+#glcrash.visible {
+  display: flex;
+}
+
+#glcrash-box {
+  width: 100%;
+  max-width: 420px;
+  background: rgba(10, 10, 10, 0.95);
+  border: 1px solid rgba(255, 0, 0, 0.35);
+  border-radius: 10px;
+  padding: 28px;
+  color: #e0e0e0;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+#glcrash-box h2 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  color: white;
+  letter-spacing: 0.5px;
+}
+
+#glcrash-box p {
+  margin: 0 0 10px 0;
+}
+
+#glcrash-box .glcrash-tip {
+  color: #999;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  padding-top: 10px;
+  margin-top: 14px;
+}
+
+#glcrash-reload {
+  margin-top: 16px;
+  padding: 8px 16px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 4px;
+  color: white;
+  font-family: monospace;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#glcrash-reload:hover {
+  background: rgba(255, 255, 255, 0.1);
+}

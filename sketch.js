@@ -528,8 +528,27 @@ function finalizeQuad() {
   cancelDrawing();
 }
 
+// --- CONTEXTO WEBGL PERDIDO ---
+// Windows + Chrome tira el contexto al conectar un proyector (cambio de topología de
+// pantallas o de GPU). Sin esto, p5 sigue dibujando contra shaders nulos y la consola
+// se llena de TypeError. Ver CLAUDE.md, "Pérdida de contexto WebGL".
+
+let glContextLost = false;
+
+function handleContextLost(e) {
+  e.preventDefault();          // sin esto el contexto no puede restaurarse nunca
+  if (glContextLost) return;
+  glContextLost = true;
+  noLoop();                    // frena draw() antes de que rompa contra shaders nulos
+  saveToLocalStorage();        // datos puros, no toca GL
+  const overlay = document.getElementById('glcrash');
+  if (overlay) overlay.classList.add('visible');
+  console.warn('Contexto WebGL perdido — render detenido. Recargar para continuar.');
+}
+
 function setup() {
   let cnv = createCanvas(windowWidth, windowHeight, WEBGL);
+  cnv.elt.addEventListener('webglcontextlost', handleContextLost, false);
   cnv.style('position', 'fixed');
   cnv.style('top', '0');
   cnv.style('left', '0');
@@ -544,6 +563,7 @@ function setup() {
 }
 
 function draw() {
+  if (glContextLost) return;
   background(0);
   textureMode(NORMAL);
 
@@ -1096,6 +1116,7 @@ function doubleClicked() {
 }
 
 function windowResized() {
+  if (glContextLost) return;
   resizeCanvas(windowWidth, windowHeight);
 }
 

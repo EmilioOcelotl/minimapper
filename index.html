@@ -45,6 +45,19 @@
     </div>
   </div>
 
+  <!-- Aviso de contexto WebGL perdido (típicamente al conectar un proyector) -->
+  <div id="glcrash">
+    <div id="glcrash-box">
+      <h2>Se perdió el contexto gráfico</h2>
+      <p>El navegador liberó la tarjeta de video y el render se detuvo. Suele pasar
+      <strong>al conectar o desconectar un proyector</strong>, o cuando el sistema cambia de GPU.</p>
+      <p>Tu trabajo está guardado: al recargar vuelven las superficies y el código de Hydra.</p>
+      <p class="glcrash-tip">Para evitarlo: conecta el proyector <em>antes</em> de abrir el navegador
+      y no cambies la configuración de pantallas con MiniMapper abierto.</p>
+      <button id="glcrash-reload" onclick="location.reload()">Recargar →</button>
+    </div>
+  </div>
+
   <div id="ui">
   <button id="panel-collapse" onclick="togglePanelCollapse()" title="Colapsar panel">‹</button>
 
