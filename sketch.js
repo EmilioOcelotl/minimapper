@@ -655,7 +655,9 @@ function draw() {
     } else if (quad.sourceEl) {
       texture(quad.sourceEl);
     } else {
-      texture(hc);
+      // Sin fuente cargada (video/imagen sin archivo, cámara resolviendo, carrusel vacío):
+      // la rejilla, no el canvas crudo de Hydra. Ver CLAUDE.md, "Rejilla de calibración".
+      texture(gridGfx);
     }
 
     if (uiVisible) stroke(255, 255, 255, 18);
@@ -797,6 +799,7 @@ function clearQuadSource(index) {
     quad.sourceEl.remove();
   }
   // p5.Image has no DOM element to remove; GC handles it
+  quad.sourceEl = null;   // sin esto el quad queda en negro en vez de volver a la rejilla
 }
 
 function deleteQuad(index) {
@@ -835,7 +838,7 @@ function changeQuadSource(index, type) {
 function startCamera(index) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     alert("Tu navegador no soporta acceso a cámara.");
-    quads[index].sourceType = 'hydra';
+    quads[index].sourceType = 'grid';
     renderQuadList();
     return;
   }
@@ -856,7 +859,7 @@ function startCamera(index) {
         ? "La cámara está en uso por otra aplicación."
         : "No se pudo acceder a la cámara.";
       alert(msg);
-      quads[index].sourceType = 'hydra';
+      quads[index].sourceType = 'grid';
       renderQuadList();
     });
 }
