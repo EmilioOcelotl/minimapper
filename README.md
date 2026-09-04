@@ -40,6 +40,7 @@ Polígono de forma libre con cualquier número de vértices.
 
 Cada superficie puede usar una fuente distinta, seleccionable con el menú junto a su nombre:
 
+- **Rejilla:** es la fuente por defecto de toda superficie nueva. Proyecta una rejilla de calibración que se deforma junto con la superficie, para alinearla con el muro o el objeto físico antes de poner contenido. Las líneas marcadas coinciden con la teselación, la marca ámbar de la esquina superior izquierda indica la orientación, y el círculo inscrito hace legible la deformación. Cuando la superficie quede alineada, cambia la fuente en el selector.
 - **Hydra:** cada superficie tiene su propio editor de código Hydra y su propio output independiente (o0–o3). El slot se asigna automáticamente y aparece en el label (`Quad 0 — o0`). Usa CTRL+Enter o ▶ para ejecutar.
 - **Carrusel:** carga múltiples imágenes que avanzan con detección de aplauso. Usa el botón **mic** (dentro de la sección de carrusel) para activar el micrófono y ajustar la sensibilidad.
 - **Video:** carga un archivo de video local con el botón "Cargar"

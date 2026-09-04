@@ -441,6 +441,63 @@ const ONSET_COOLDOWN = 800;
 let onsetRatio = 3.5;
 const ONSET_MIN = 0.04;
 
+// --- REJILLA DE CALIBRACIÓN ---
+// Textura estática en espacio UV: el parche Bezier la deforma igual que deformará el
+// contenido, así que sirve para alinear el quad con la superficie física antes de
+// elegir la fuente real. Un solo p5.Graphics compartido por todos los quads en rejilla.
+const GRID_TEX_SIZE = 512;
+let gridGfx = null;
+
+function buildGridTexture() {
+  const S = GRID_TEX_SIZE;
+  const g = createGraphics(S, S);
+  g.background(0);
+  g.noFill();
+
+  // diagonales: acusan si el parche quedó torcido
+  g.strokeWeight(1);
+  g.stroke(255, 55);
+  g.line(0, 0, S, S);
+  g.line(S, 0, 0, S);
+
+  // subdivisión fina: cada 1/16, apenas visible
+  for (let i = 1; i < 16; i++) {
+    if (i % 2 === 0) continue;
+    const p = (i / 16) * S;
+    g.line(p, 0, p, S);
+    g.line(0, p, S, p);
+  }
+
+  // subdivisión marcada: cada 1/8, coincide con TESS, así se lee también la malla
+  g.stroke(255, 200);
+  g.strokeWeight(2);
+  for (let i = 1; i < 8; i++) {
+    const p = (i / 8) * S;
+    g.line(p, 0, p, S);
+    g.line(0, p, S, p);
+  }
+
+  // círculo inscrito: la deformación se lee mejor en una curva que en una recta
+  g.stroke(255, 120);
+  g.strokeWeight(2);
+  g.ellipse(S / 2, S / 2, S * 0.75);
+
+  // borde: el límite exacto del quad
+  g.stroke(255, 240);
+  g.strokeWeight(6);
+  g.rect(3, 3, S - 6, S - 6);
+
+  // marca de orientación (ámbar, como los atractores): rompe la simetría en los dos ejes,
+  // así se distingue una rejilla rotada o volteada de una bien puesta
+  const m = S / 5;
+  g.stroke(255, 200, 64);
+  g.strokeWeight(7);
+  g.line(14, 14, m, 14);
+  g.line(14, 14, 14, m);
+
+  return g;
+}
+
 function startDrawingQuad() {
   if (freeformMode) cancelFreeform();
   drawingMode = true;
@@ -466,17 +523,14 @@ function cancelFreeform() {
 
 function finalizeFreeform() {
   if (freeformVerts.length < 3) { cancelFreeform(); return; }
-  const _slotFF = assignHydraSlot();
-  const _codeFF = `osc(1, 1, 1).out(o${_slotFF})`;
-  evalHydra(_codeFF);
   const shape = {
     kind: 'freeform',
     vertices: freeformVerts.map(v => createVector(v.x, v.y)),
-    sourceType: 'hydra',
+    sourceType: 'grid',
     sourceEl: null,
     sourceUrl: null,
-    hydraCode: _codeFF,
-    hydraOutput: _slotFF
+    hydraCode: '',
+    hydraOutput: null
   };
   quads.push(shape);
   undoStack.length = 0;
@@ -515,10 +569,7 @@ function finalizeQuad() {
     }
   }
 
-  const _slotQ = assignHydraSlot();
-  const _codeQ = `osc(1, 1, 1).out(o${_slotQ})`;
-  evalHydra(_codeQ);
-  const newQuad = { points, sourceType: 'hydra', sourceEl: null, sourceUrl: null, hydraCode: _codeQ, hydraOutput: _slotQ };
+  const newQuad = { points, sourceType: 'grid', sourceEl: null, sourceUrl: null, hydraCode: '', hydraOutput: null };
   buildTessCache(newQuad);
   quads.push(newQuad);
   undoStack.length = 0;
@@ -557,6 +608,7 @@ function setup() {
   hc.hide();
   window.noise = _hydraNoise; // restore after p5 overwrote it
   for (let i = 0; i < 4; i++) hydraCanvases.push(createGraphics(512, 512));
+  gridGfx = buildGridTexture();
 
   _applySceneData(scenes[currentSceneIndex]);
   renderSceneStrip();
@@ -588,7 +640,9 @@ function draw() {
       quad.sourceEl.drawingContext.drawImage(quad.sourceVideo, 0, 0, 512, 512);
     }
 
-    if (quad.sourceType === 'carousel' && quad.carousel && quad.carousel.length > 0) {
+    if (quad.sourceType === 'grid') {
+      texture(gridGfx);
+    } else if (quad.sourceType === 'carousel' && quad.carousel && quad.carousel.length > 0) {
       texture(quad.carousel[quad.carouselIndex].img);
     } else if (quad.sourceType === 'hydra') {
       const _slot = quad.hydraOutput ?? 0;
@@ -1011,6 +1065,7 @@ function renderQuadList() {
       <span class="quad-label">${q.kind === 'freeform' ? 'Libre' : 'Quad'} ${i}${q.sourceType === 'hydra' && q.hydraOutput != null ? ` — o${q.hydraOutput}` : ''}</span>
       <div class="quad-controls">
         <select onchange="changeQuadSource(${i}, this.value)">
+          <option value="grid"      ${q.sourceType === 'grid'      ? 'selected' : ''}>Rejilla</option>
           <option value="hydra"     ${q.sourceType === 'hydra'     ? 'selected' : ''}>Hydra</option>
           <option value="video"     ${q.sourceType === 'video'     ? 'selected' : ''}>Video</option>
           <option value="image"     ${q.sourceType === 'image'     ? 'selected' : ''}>Imagen</option>
