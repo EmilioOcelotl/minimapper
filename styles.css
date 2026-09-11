@@ -919,3 +919,10 @@ select option {
 #glcrash-reload:hover {
   background: rgba(255, 255, 255, 0.1);
 }
+
+.quad-url-note {
+  font-size: 10px;
+  line-height: 1.35;
+  margin-top: 3px;
+  word-break: break-all;
+}

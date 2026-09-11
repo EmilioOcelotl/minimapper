@@ -833,6 +833,7 @@ function changeQuadSource(index, type) {
   clearQuadSource(index);
   quads[index].sourceType = type;
   quads[index].sourceEl = null;
+  quads[index].urlNote = null;
   if (type === 'hydra') {
     const slot = assignHydraSlot();
     quads[index].hydraOutput = slot;
@@ -929,6 +930,9 @@ function loadQuadSourceFromUrl(index, url) {
     videoEl.addEventListener('error', () => {
       console.error('Video decode error (código', videoEl.error?.code, ')— convierte el archivo a H.264/MP4.');
       clearQuadSource(index);
+      // El campo se vacía al limpiar la fuente: sin esto, el enlace desaparece y no queda
+      // dicho por qué. H.265/HEVC es la causa habitual (ver CLAUDE.md, 2026-04-30).
+      quads[index].urlNote = { text: 'El navegador no pudo leer ese video. Tiene que ser H.264/MP4.', ok: false };
       renderQuadList();
     });
     videoEl.src = url;
@@ -960,6 +964,121 @@ function restoreLocalSource(index, url) {
   } else {
     loadImage(url, (img) => { quads[index].sourceEl = img; }, () => { quads[index].sourceEl = null; });
   }
+}
+
+// --- NORMALIZADOR DE ENLACES ---
+// El campo URL pide la dirección del archivo, pero el botón de compartir de cada sitio da
+// otra cosa: la página, un <iframe>, un visor. Traducir eso a mano se comió media sesión de
+// clase. Esto lo traduce solo, y cuando el enlace no puede servir lo dice en vez de dejar un
+// quad en negro sin explicación.
+//
+// Pura: no toca el DOM, ni la red, ni el estado. Lo que no reconoce lo devuelve tal cual,
+// que es el comportamiento de siempre. Devuelve { url, note, ok }:
+//   ok:true  + note null   paso libre, no había nada que traducir
+//   ok:true  + note texto  se tradujo; el aviso dice qué se reconoció
+//   ok:false + note texto  reconocido y no sirve: no hay nada que cargar
+
+const DIRECT_FILE_RE = /\.(mp4|webm|ogv|mov|m4v|gif|png|jpe?g|webp|avif)$/i;
+
+// Sitios que sirven su video por streaming y nunca entregan un archivo que el navegador
+// pueda usar como textura. Reconocerlos ahorra el rato de mirar un quad vacío.
+const NO_DIRECT_FILE = [
+  { re: /(^|\.)(youtube\.com|youtu\.be)$/i, note: 'YouTube no entrega el archivo. Descarga el video y cárgalo con Archivo.' },
+  { re: /(^|\.)vimeo\.com$/i,                 note: 'Vimeo no entrega el archivo. Descarga el video y cárgalo con Archivo.' },
+  { re: /(^|\.)instagram\.com$/i,             note: 'Instagram no entrega el archivo. Descarga el video y cárgalo con Archivo.' },
+  { re: /(^|\.)tiktok\.com$/i,                note: 'TikTok no entrega el archivo. Descarga el video y cárgalo con Archivo.' },
+  { re: /(^|\.)(twitter\.com|x\.com)$/i,      note: 'X no entrega el archivo. Descarga el video y cárgalo con Archivo.' },
+  { re: /(^|\.)(drive|docs)\.google\.com$/i,  note: 'Google Drive no sirve el archivo a otra página. Descárgalo y cárgalo con Archivo.' }
+];
+
+// El ID es lo único que hace falta de un enlace de Giphy; el resto es decoración.
+// Página:  giphy.com/gifs/<slug>-<ID>, /clips/<slug>-<ID>, /stickers/…, /embed/<ID>
+// Archivo: media<N>.giphy.com/media/[v1.<blob>/]<ID>/giphy.gif?cid=…  ← el ID es el
+//          penúltimo segmento, no el que sigue a /media/
+function giphyId(host, path) {
+  const segs = path.split('/').filter(Boolean);
+  const valid = (s) => /^[A-Za-z0-9]{7,}$/.test(s);
+  if (host.startsWith('media')) {
+    if (segs.length < 2) return null;
+    const last = segs[segs.length - 1];
+    const cand = DIRECT_FILE_RE.test(last) ? segs[segs.length - 2] : last;
+    return valid(cand) ? cand : null;
+  }
+  const i = segs.findIndex((s) => ['gifs', 'clips', 'stickers', 'embed', 'media'].includes(s));
+  if (i < 0 || !segs[i + 1]) return null;
+  const tail = segs[i + 1].split('-').pop();
+  return valid(tail) ? tail : null;
+}
+
+function normalizeSourceUrl(raw, sourceType) {
+  const pass = (url, note = null) => ({ url, note, ok: true });
+  const stop = (note) => ({ url: null, note, ok: false });
+
+  const text = (raw || '').trim();
+  if (!text) return pass('');
+
+  // Lo pegado puede traer texto alrededor o ser el <iframe> entero del botón Embed
+  const found = text.match(/https?:\/\/[^\s"'<>]+/);
+  let candidate = found ? found[0] : text;
+  if (!/^https?:\/\//i.test(candidate)) {
+    if (!/^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(candidate)) return pass(text);
+    candidate = 'https://' + candidate;
+  }
+
+  let u;
+  try { u = new URL(candidate); } catch (e) { return pass(text); }
+  const host = u.hostname.toLowerCase();
+
+  if (/(^|\.)giphy\.com$/.test(host)) {
+    const id = giphyId(host, u.pathname);
+    if (!id) return pass(candidate);
+    const ext = sourceType === 'image' ? 'gif' : 'mp4';
+    return pass(`https://media.giphy.com/media/${id}/giphy.${ext}`, `Giphy → archivo ${ext}`);
+  }
+
+  // FileBrowser: /share/<hash> es la página del navegador de archivos; el archivo está
+  // detrás de la API pública. /files/ es el explorador privado y no se puede traducir:
+  // el hash lo genera el servidor al compartir.
+  if (host === 'nube.ocelotl.cc') {
+    const share = u.pathname.match(/^\/share\/([^/]+)(\/.*)?$/);
+    if (share) return pass(`${u.origin}/api/public/dl/${share[1]}${share[2] || ''}`, 'nube → descarga directa');
+    if (u.pathname.startsWith('/files/')) return stop('Ese enlace es del explorador. En la nube usa Compartir y pega el enlace /share/.');
+    return pass(candidate);
+  }
+
+  // El hash de media.tenor.com no se deriva del ID de la página, y cambia por formato
+  if (/(^|\.)tenor\.com$/.test(host) && !host.startsWith('media')) {
+    return stop('Tenor no da enlace directo. Usa su botón de descarga y carga el archivo con Archivo.');
+  }
+
+  if (/(^|\.)dropbox\.com$/.test(host)) {
+    u.searchParams.delete('dl');
+    u.searchParams.set('raw', '1');
+    return pass(u.toString(), 'Dropbox → archivo directo');
+  }
+
+  for (const site of NO_DIRECT_FILE) if (site.re.test(host)) return stop(site.note);
+
+  return pass(candidate);
+}
+
+// Punto de entrada del campo URL: traduce, deja dicho qué reconoció y sólo entonces carga.
+// loadQuadSourceFromUrl() recibe la URL ya buena, que es la que viaja a la sesión — al
+// restaurar no se vuelve a pasar por aquí.
+function loadQuadSourceFromInput(index, raw) {
+  const quad = quads[index];
+  if (!quad) return;
+  const res = normalizeSourceUrl(raw, quad.sourceType);
+
+  if (!res.ok) {
+    quad.urlNote = { text: res.note, ok: false };
+  } else if (res.url.startsWith('http://') && location.protocol === 'https:') {
+    quad.urlNote = { text: 'El navegador bloquea un archivo http dentro de una página https. Busca la versión https o usa Archivo.', ok: false };
+  } else {
+    quad.urlNote = res.note ? { text: res.note, ok: true } : null;
+    loadQuadSourceFromUrl(index, res.url);
+  }
+  renderQuadList();
 }
 
 function addCarouselImage(index) {
@@ -1056,12 +1175,15 @@ function renderQuadList() {
     const hasMedia = q.sourceType === 'video' || q.sourceType === 'image';
     const fileBtn = hasMedia ? `<button onclick="loadQuadSource(${i})">Archivo</button>` : '';
     const currentUrl = (q.sourceUrl && q.sourceUrl.startsWith('http')) ? q.sourceUrl : '';
+    const note = q.urlNote
+      ? `<div class="quad-url-note ${q.urlNote.ok ? 'status-ok' : 'status-error'}">${q.urlNote.text}</div>`
+      : '';
     const urlRow = hasMedia
       ? `<div class="quad-url-row">
-          <input type="text" class="quad-url-input" value="${currentUrl}" placeholder="https://..."
-            onkeydown="if(event.key==='Enter')loadQuadSourceFromUrl(${i},this.value.trim())">
-          <button onclick="loadQuadSourceFromUrl(${i},this.parentElement.querySelector('input').value.trim())">URL</button>
-        </div>`
+          <input type="text" class="quad-url-input" value="${currentUrl}" placeholder="pega el enlace"
+            onkeydown="if(event.key==='Enter')loadQuadSourceFromInput(${i},this.value)">
+          <button onclick="loadQuadSourceFromInput(${i},this.parentElement.querySelector('input').value)">URL</button>
+        </div>${note}`
       : '';
 
     const hydraSection = q.sourceType === 'hydra'
@@ -1236,7 +1358,12 @@ function _applySceneData(sceneData) {
   quads = [];
   hydraSlots = [0, 0, 0, 0];
   const legacyCode = sceneData.hydraCode || '';
-  quads = (sceneData.quads || []).map(q => {
+  // Se toma el array una vez y se conserva: restaurar una fuente por URL llama a
+  // saveToLocalStorage(), que reasigna scenes[cur].quads con lo que hay vivo en ese
+  // momento. Leyendo sceneData.quads[i] dentro del bucle, el segundo quad con URL y los
+  // que siguen se leían ya pisados y se quedaban sin fuente.
+  const sceneQuads = sceneData.quads || [];
+  quads = sceneQuads.map(q => {
     const srcType = q.sourceType === 'camera' ? 'camera' : (q.sourceType || 'hydra');
     const hydraCode = q.hydraCode != null ? q.hydraCode : (srcType === 'hydra' ? legacyCode : '');
     let hydraOutput = null;
@@ -1254,7 +1381,7 @@ function _applySceneData(sceneData) {
   });
   undoStack.length = 0;
   quads.forEach((q, i) => {
-    const qData = sceneData.quads[i];
+    const qData = sceneQuads[i];
     if (qData && qData.sourceUrl && qData.sourceUrl.startsWith('http')) {
       loadQuadSourceFromUrl(i, qData.sourceUrl);
     } else if (qData && qData.sourceUrl) {
