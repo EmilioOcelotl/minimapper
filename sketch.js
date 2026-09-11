@@ -800,12 +800,19 @@ function clearQuadSource(index, revokeLocalUrl = true) {
     quad.sourceUrl = null;
   }
   if (quad.sourceVideo) {
-    // Desmontar sin provocar una carga fallida: `src = ''` se resuelve contra la URL de la
-    // página, falla y dispara un `error` tardío sobre un elemento que ya no le importa a
-    // nadie. removeAttribute + load() vacía el elemento sin intentar cargar nada.
     quad.sourceVideo.pause();
-    quad.sourceVideo.removeAttribute('src');
-    quad.sourceVideo.load();
+    if (quad.sourceVideo.srcObject) {
+      // Una captura de pantalla entra por srcObject. Hay que parar los tracks o el navegador
+      // sigue anunciando que la pestaña se comparte, con el stream ya sin destino.
+      quad.sourceVideo.srcObject.getTracks().forEach(t => t.stop());
+      quad.sourceVideo.srcObject = null;
+    } else {
+      // Desmontar sin provocar una carga fallida: `src = ''` se resuelve contra la URL de la
+      // página, falla y dispara un `error` tardío sobre un elemento que ya no le importa a
+      // nadie. removeAttribute + load() vacía el elemento sin intentar cargar nada.
+      quad.sourceVideo.removeAttribute('src');
+      quad.sourceVideo.load();
+    }
     if (quad.sourceVideo.parentNode) quad.sourceVideo.parentNode.removeChild(quad.sourceVideo);
     quad.sourceVideo = null;
   }
@@ -882,6 +889,64 @@ function startCamera(index) {
         : "No se pudo acceder a la cámara.";
       alert(msg);
       quads[index].sourceType = 'grid';
+      renderQuadList();
+    });
+}
+
+// Captura de pantalla o de otra pestaña como fuente. Es el camino para lo que no entrega
+// un archivo —YouTube y compañía— y de paso para cualquier cosa que corra en la máquina:
+// otra aplicación, un PDF, otra ventana de minimapper.
+//
+// Se alimenta de la misma tubería que el video por URL: un <video> oculto del que draw()
+// copia cada cuadro a un proxy p5.Graphics. La única diferencia es que el video entra por
+// srcObject, así que el desmontaje va por la otra rama de clearQuadSource().
+//
+// getDisplayMedia() exige un gesto de la usuaria, y por eso vive en un botón y no en el
+// selector: elegir "Pantalla" en el desplegable no basta como gesto. Por lo mismo no se
+// puede reanudar sola, así que la fuente no sobrevive a recargar ni a cambiar de escena —
+// el tipo de fuente sí se guarda, y el botón queda esperando otro clic.
+function startScreenCapture(index) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    quads[index].urlNote = { text: 'Este navegador no puede capturar pantalla aquí. Sirve la página con python3 -m http.server en vez de abrir el archivo directo.', ok: false };
+    renderQuadList();
+    return;
+  }
+  navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false })
+    .then(stream => {
+      // El diálogo tarda lo que tarde la usuaria; para cuando vuelve, el quad pudo cambiar
+      // de tipo o desaparecer. Sin esto quedaría una pestaña compartiéndose a nadie.
+      if (!quads[index] || quads[index].sourceType !== 'pantalla') {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+      clearQuadSource(index);
+      const videoEl = document.createElement('video');
+      videoEl.muted = true;
+      videoEl.style.display = 'none';
+      document.body.appendChild(videoEl);
+      videoEl.srcObject = stream;
+      videoEl.play().catch(() => {});
+      // Cortar la compartición desde la barra del navegador es un gesto normal, no una
+      // falla: el quad vuelve a la rejilla y el botón queda listo para elegir otra vez.
+      stream.getVideoTracks()[0].addEventListener('ended', () => {
+        if (quads[index]?.sourceVideo !== videoEl) return;
+        clearQuadSource(index);
+        quads[index].urlNote = { text: 'Terminó la compartición. Elige pantalla otra vez para seguir.', ok: false };
+        renderQuadList();
+      });
+      quads[index].sourceVideo = videoEl;
+      quads[index].sourceEl = createGraphics(512, 512);
+      quads[index].urlNote = { text: 'Compartiendo pantalla.', ok: true };
+      renderQuadList();
+      saveToLocalStorage();
+    })
+    .catch(err => {
+      if (!quads[index]) return;
+      // Cancelar el diálogo también llega como NotAllowedError, y cancelar no es un error
+      // que valga la pena anunciar.
+      quads[index].urlNote = err.name === 'NotAllowedError'
+        ? null
+        : { text: 'No se pudo capturar la pantalla.', ok: false };
       renderQuadList();
     });
 }
@@ -992,12 +1057,12 @@ const DIRECT_FILE_RE = /\.(mp4|webm|ogv|mov|m4v|gif|png|jpe?g|webp|avif)$/i;
 // Sitios que sirven su video por streaming y nunca entregan un archivo que el navegador
 // pueda usar como textura. Reconocerlos ahorra el rato de mirar un quad vacío.
 const NO_DIRECT_FILE = [
-  { re: /(^|\.)(youtube\.com|youtu\.be)$/i, note: 'YouTube no entrega el archivo. Descarga el video y cárgalo con Archivo.' },
-  { re: /(^|\.)vimeo\.com$/i,                 note: 'Vimeo no entrega el archivo. Descarga el video y cárgalo con Archivo.' },
-  { re: /(^|\.)instagram\.com$/i,             note: 'Instagram no entrega el archivo. Descarga el video y cárgalo con Archivo.' },
-  { re: /(^|\.)tiktok\.com$/i,                note: 'TikTok no entrega el archivo. Descarga el video y cárgalo con Archivo.' },
-  { re: /(^|\.)(twitter\.com|x\.com)$/i,      note: 'X no entrega el archivo. Descarga el video y cárgalo con Archivo.' },
-  { re: /(^|\.)(drive|docs)\.google\.com$/i,  note: 'Google Drive no sirve el archivo a otra página. Descárgalo y cárgalo con Archivo.' }
+  { re: /(^|\.)(youtube\.com|youtu\.be)$/i, note: 'YouTube no entrega el archivo. Ponlo en Pantalla y comparte la pestaña, o descarga el video y cárgalo con Archivo.' },
+  { re: /(^|\.)vimeo\.com$/i,                 note: 'Vimeo no entrega el archivo. Ponlo en Pantalla y comparte la pestaña, o descarga el video y cárgalo con Archivo.' },
+  { re: /(^|\.)instagram\.com$/i,             note: 'Instagram no entrega el archivo. Ponlo en Pantalla y comparte la pestaña, o descarga el video y cárgalo con Archivo.' },
+  { re: /(^|\.)tiktok\.com$/i,                note: 'TikTok no entrega el archivo. Ponlo en Pantalla y comparte la pestaña, o descarga el video y cárgalo con Archivo.' },
+  { re: /(^|\.)(twitter\.com|x\.com)$/i,      note: 'X no entrega el archivo. Ponlo en Pantalla y comparte la pestaña, o descarga el video y cárgalo con Archivo.' },
+  { re: /(^|\.)(drive|docs)\.google\.com$/i,  note: 'Google Drive no sirve el archivo a otra página. Ponlo en Pantalla y comparte la pestaña, o descárgalo y cárgalo con Archivo.' }
 ];
 
 // El ID es lo único que hace falta de un enlace de Giphy; el resto es decoración.
@@ -1183,6 +1248,10 @@ function renderQuadList() {
 
     const hasMedia = q.sourceType === 'video' || q.sourceType === 'image';
     const fileBtn = hasMedia ? `<button onclick="loadQuadSource(${i})">Archivo</button>` : '';
+    // getDisplayMedia() necesita un gesto propio: el desplegable no cuenta como tal.
+    const screenBtn = q.sourceType === 'pantalla'
+      ? `<button onclick="startScreenCapture(${i})">Elegir</button>`
+      : '';
     const currentUrl = (q.sourceUrl && q.sourceUrl.startsWith('http')) ? q.sourceUrl : '';
     const note = q.urlNote
       ? `<div class="quad-url-note ${q.urlNote.ok ? 'status-ok' : 'status-error'}">${q.urlNote.text}</div>`
@@ -1192,7 +1261,7 @@ function renderQuadList() {
           <input type="text" class="quad-url-input" value="${currentUrl}" placeholder="pega el enlace"
             onkeydown="if(event.key==='Enter')loadQuadSourceFromInput(${i},this.value)">
           <button onclick="loadQuadSourceFromInput(${i},this.parentElement.querySelector('input').value)">URL</button>
-        </div>${note}`
+        </div>`
       : '';
 
     const hydraSection = q.sourceType === 'hydra'
@@ -1238,12 +1307,15 @@ function renderQuadList() {
           <option value="video"     ${q.sourceType === 'video'     ? 'selected' : ''}>Video</option>
           <option value="image"     ${q.sourceType === 'image'     ? 'selected' : ''}>Imagen</option>
           <option value="camera"    ${q.sourceType === 'camera'    ? 'selected' : ''}>Cámara</option>
+          <option value="pantalla"  ${q.sourceType === 'pantalla'  ? 'selected' : ''}>Pantalla</option>
           <option value="carousel"  ${q.sourceType === 'carousel'  ? 'selected' : ''}>Carrusel</option>
         </select>
         ${fileBtn}
+        ${screenBtn}
         <button onclick="deleteQuad(${i})">✕</button>
       </div>
       ${urlRow}
+      ${note}
       ${hydraSection}
       ${carouselSection}
     `;
