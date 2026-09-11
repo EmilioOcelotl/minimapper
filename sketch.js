@@ -230,9 +230,13 @@ function applySession(session) {
   quads = [];
 
   const normalized = normalizeSession(session);
+  const dropped = scenes;
   scenes = normalized.scenes;
   currentSceneIndex = Math.min(normalized.currentSceneIndex, scenes.length - 1);
   playbackMode = normalized.playbackMode;
+  // Las capturas que estaban aparcadas en las escenas que esta sesión reemplaza no las
+  // alcanzó el clearQuadSource() de arriba, que sólo tocó los quads vivos.
+  releaseScreenSources(dropped);
 
   const sceneData = scenes[currentSceneIndex];
   let pending = 0;
@@ -277,11 +281,12 @@ function applySession(session) {
 
 // --- LOCAL STORAGE ---
 
-// El snapshot en memoria lleva referencias vivas (blob: de archivo local, imágenes
-// del carrusel) que no tienen sentido —ni cabida— en el JSON: al recargar no existen.
+// El snapshot en memoria lleva referencias vivas (blob: de archivo local, imágenes del
+// carrusel, el <video> de una captura de pantalla) que no tienen sentido —ni cabida— en el
+// JSON: al recargar no existen.
 function serializableQuads(quadsData) {
   return (quadsData || []).map(q => {
-    const { carousel, carouselIndex, ...rest } = q;
+    const { carousel, carouselIndex, screenSource, ...rest } = q;
     if (rest.sourceUrl && !rest.sourceUrl.startsWith('http')) delete rest.sourceUrl;
     return rest;
   });
@@ -783,9 +788,10 @@ function draw() {
   }
 }
 
-// revokeLocalUrl=false desmonta el quad sin matar el blob: de un archivo local —
-// lo usa el cambio de escena, donde la fuente tiene que seguir viva para volver.
-function clearQuadSource(index, revokeLocalUrl = true) {
+// releaseSources=false desmonta el quad sin matar lo que tiene que seguir vivo para volver:
+// el blob: de un archivo local y el stream de una captura de pantalla. Lo usa el cambio de
+// escena, donde el quad se desarma pero la fuente sigue siendo de alguien.
+function clearQuadSource(index, releaseSources = true) {
   const quad = quads[index];
   if (quad.sourceType === 'hydra') {
     releaseHydraSlot(quad.hydraOutput);
@@ -796,25 +802,32 @@ function clearQuadSource(index, revokeLocalUrl = true) {
     quad.carouselIndex = 0;
   }
   if (quad.sourceUrl) {
-    if (revokeLocalUrl && !quad.sourceUrl.startsWith('http')) URL.revokeObjectURL(quad.sourceUrl);
+    if (releaseSources && !quad.sourceUrl.startsWith('http')) URL.revokeObjectURL(quad.sourceUrl);
     quad.sourceUrl = null;
   }
   if (quad.sourceVideo) {
-    quad.sourceVideo.pause();
-    if (quad.sourceVideo.srcObject) {
-      // Una captura de pantalla entra por srcObject. Hay que parar los tracks o el navegador
-      // sigue anunciando que la pestaña se comparte, con el stream ya sin destino.
-      quad.sourceVideo.srcObject.getTracks().forEach(t => t.stop());
-      quad.sourceVideo.srcObject = null;
+    if (!releaseSources && quad.sourceVideo.srcObject) {
+      // Cambio de escena sobre una captura viva: se suelta la referencia y ya. El <video>
+      // se queda en el DOM recibiendo el stream —no se puede "reanudar" una compartición,
+      // sólo mantenerla— y el snapshot se lo guarda para reengancharlo al volver.
+      quad.sourceVideo = null;
     } else {
-      // Desmontar sin provocar una carga fallida: `src = ''` se resuelve contra la URL de la
-      // página, falla y dispara un `error` tardío sobre un elemento que ya no le importa a
-      // nadie. removeAttribute + load() vacía el elemento sin intentar cargar nada.
-      quad.sourceVideo.removeAttribute('src');
-      quad.sourceVideo.load();
+      quad.sourceVideo.pause();
+      if (quad.sourceVideo.srcObject) {
+        // Una captura de pantalla entra por srcObject. Hay que parar los tracks o el navegador
+        // sigue anunciando que la pestaña se comparte, con el stream ya sin destino.
+        quad.sourceVideo.srcObject.getTracks().forEach(t => t.stop());
+        quad.sourceVideo.srcObject = null;
+      } else {
+        // Desmontar sin provocar una carga fallida: `src = ''` se resuelve contra la URL de la
+        // página, falla y dispara un `error` tardío sobre un elemento que ya no le importa a
+        // nadie. removeAttribute + load() vacía el elemento sin intentar cargar nada.
+        quad.sourceVideo.removeAttribute('src');
+        quad.sourceVideo.load();
+      }
+      if (quad.sourceVideo.parentNode) quad.sourceVideo.parentNode.removeChild(quad.sourceVideo);
+      quad.sourceVideo = null;
     }
-    if (quad.sourceVideo.parentNode) quad.sourceVideo.parentNode.removeChild(quad.sourceVideo);
-    quad.sourceVideo = null;
   }
   if (quad.sourceType === 'camera' && quad.sourceEl) {
     const vid = quad.sourceEl.elt;
@@ -1021,6 +1034,39 @@ function loadQuadSourceFromUrl(index, url) {
     });
   }
   saveToLocalStorage();
+}
+
+// Vuelve a enganchar una captura de pantalla que siguió corriendo mientras su escena no
+// estaba montada. No rehace nada: el <video> es el mismo, con el mismo stream.
+//
+// La compartición pudo cortarse en el intervalo —desde la barra del navegador, o porque se
+// cerró la pestaña compartida—. El listener de 'ended' no pudo decirlo, porque su guarda de
+// identidad lo calla mientras el quad no es suyo, así que se revisa aquí.
+function restoreScreenSource(index, saved) {
+  const stream = saved.videoEl && saved.videoEl.srcObject;
+  const vivo = stream && stream.getVideoTracks().some(t => t.readyState === 'live');
+  if (!vivo) {
+    if (saved.videoEl && saved.videoEl.parentNode) saved.videoEl.parentNode.removeChild(saved.videoEl);
+    quads[index].urlNote = { text: 'Terminó la compartición. Elige pantalla otra vez para seguir.', ok: false };
+    return;
+  }
+  quads[index].sourceVideo = saved.videoEl;
+  quads[index].sourceEl = saved.proxy || createGraphics(512, 512);
+}
+
+// Para las capturas que sólo viven en escenas que se están tirando. Se salta las que
+// cualquier otra escena —o un quad vivo— todavía referencia: al duplicar una escena, las dos
+// apuntan al mismo <video>, y borrar una no puede apagarle la fuente a la otra.
+function releaseScreenSources(dropped) {
+  const enUso = new Set();
+  quads.forEach(q => { if (q.sourceVideo) enUso.add(q.sourceVideo); });
+  scenes.forEach(sc => (sc.quads || []).forEach(q => { if (q.screenSource) enUso.add(q.screenSource.videoEl); }));
+  dropped.forEach(sc => (sc.quads || []).forEach(q => {
+    const el = q.screenSource && q.screenSource.videoEl;
+    if (!el || enUso.has(el)) return;
+    if (el.srcObject) { el.srcObject.getTracks().forEach(t => t.stop()); el.srcObject = null; }
+    if (el.parentNode) el.parentNode.removeChild(el);
+  }));
 }
 
 // Rehace el elemento de un archivo local desde su blob:, que vive mientras viva la
@@ -1420,9 +1466,10 @@ function windowResized() {
 function snapshotCurrentScene() {
   if (!scenes[currentSceneIndex]) return;
   scenes[currentSceneIndex].quads = quads.map(q => {
-    // El snapshot en memoria guarda también el blob: de un archivo local y las
-    // imágenes del carrusel, para que sobrevivan al ir y volver de escena.
-    // serializableQuads() los quita antes de guardar: no existen tras recargar.
+    // El snapshot en memoria guarda también el blob: de un archivo local, las imágenes
+    // del carrusel y el <video> de una captura de pantalla, para que sobrevivan al ir y
+    // volver de escena. serializableQuads() los quita antes de guardar: al recargar la
+    // página no existe ninguno de los tres.
     const srcUrl = q.sourceUrl || null;
     const data = q.kind === 'freeform'
       ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType }
@@ -1430,6 +1477,9 @@ function snapshotCurrentScene() {
     if (srcUrl) data.sourceUrl = srcUrl;
     if (q.sourceType === 'hydra') { data.hydraCode = q.hydraCode || ''; data.hydraOutput = q.hydraOutput ?? 0; }
     if (q.carousel && q.carousel.length) { data.carousel = q.carousel; data.carouselIndex = q.carouselIndex || 0; }
+    // Se guarda el elemento entero, no el stream: una compartición no se reanuda, sólo se
+    // mantiene. Y con él su proxy, para no dejar un p5.Graphics tirado por cada ida y vuelta.
+    if (q.sourceType === 'pantalla' && q.sourceVideo) data.screenSource = { videoEl: q.sourceVideo, proxy: q.sourceEl };
     return data;
   });
 }
@@ -1467,6 +1517,8 @@ function _applySceneData(sceneData) {
       loadQuadSourceFromUrl(i, qData.sourceUrl);
     } else if (qData && qData.sourceUrl) {
       restoreLocalSource(i, qData.sourceUrl);
+    } else if (qData && qData.screenSource) {
+      restoreScreenSource(i, qData.screenSource);
     } else if (q.sourceType === 'camera') {
       startCamera(i);
     } else if (q.sourceType === 'hydra' && q.hydraCode) {
@@ -1512,10 +1564,13 @@ function addScene() {
 function deleteScene(index) {
   if (scenes.length <= 1) return;
   if (isPlaying) stopPlayback();
-  scenes.splice(index, 1);
+  const [dropped] = scenes.splice(index, 1);
   if (currentSceneIndex >= scenes.length) currentSceneIndex = scenes.length - 1;
   else if (index < currentSceneIndex) currentSceneIndex--;
   _applySceneData(scenes[currentSceneIndex]);
+  // Después de montar la escena que sobrevive: así el recuento de lo que sigue en uso ya
+  // es el nuevo, y una captura que era sólo de la escena borrada deja de compartirse.
+  releaseScreenSources([dropped]);
   saveToLocalStorage();
   renderSceneStrip();
 }
@@ -1525,8 +1580,10 @@ function deleteAllScenes() {
   if (isPlaying) stopPlayback();
   snapshotCurrentScene();
   const current = scenes[currentSceneIndex];
+  const dropped = scenes.filter((_, i) => i !== currentSceneIndex);
   scenes = [{ id: 1, duration_s: current.duration_s, hydraCode: current.hydraCode, quads: current.quads }];
   currentSceneIndex = 0;
+  releaseScreenSources(dropped);
   saveToLocalStorage();
   renderSceneStrip();
 }
