@@ -12,7 +12,7 @@
 // Para forzar que todos reciban una versión nueva de los archivos, sube
 // CACHE_VERSION. El activate borra los cachés viejos.
 
-const CACHE_VERSION = 'minimapper-v5';
+const CACHE_VERSION = 'minimapper-v6';
 
 // Archivos locales que se precachean al instalar. Rutas relativas para que
 // funcione tanto en la raíz como en un subdirectorio (GitHub Pages: /minimapper/).

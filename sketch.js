@@ -800,8 +800,12 @@ function clearQuadSource(index, revokeLocalUrl = true) {
     quad.sourceUrl = null;
   }
   if (quad.sourceVideo) {
+    // Desmontar sin provocar una carga fallida: `src = ''` se resuelve contra la URL de la
+    // página, falla y dispara un `error` tardío sobre un elemento que ya no le importa a
+    // nadie. removeAttribute + load() vacía el elemento sin intentar cargar nada.
     quad.sourceVideo.pause();
-    quad.sourceVideo.src = '';
+    quad.sourceVideo.removeAttribute('src');
+    quad.sourceVideo.load();
     if (quad.sourceVideo.parentNode) quad.sourceVideo.parentNode.removeChild(quad.sourceVideo);
     quad.sourceVideo = null;
   }
@@ -928,6 +932,11 @@ function loadQuadSourceFromUrl(index, url) {
     videoEl.style.display = 'none';
     document.body.appendChild(videoEl);
     videoEl.addEventListener('error', () => {
+      // Un <video> desmontado puede seguir avisando de errores que ya no son de nadie, y el
+      // índice para entonces apunta a otro quad — el de la escena a la que se acaba de
+      // entrar, o el de la fuente que se acaba de poner encima. Sin esta guarda, ese aviso
+      // tardío le borraba el enlace a un quad sano y le dejaba escrito un motivo falso.
+      if (quads[index]?.sourceVideo !== videoEl) return;
       console.error('Video decode error (código', videoEl.error?.code, ')— convierte el archivo a H.264/MP4.');
       clearQuadSource(index);
       // El campo se vacía al limpiar la fuente: sin esto, el enlace desaparece y no queda
