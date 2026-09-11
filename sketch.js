@@ -168,7 +168,7 @@ function saveSession() {
             if (q.sourceType === 'hydra') { data.hydraCode = q.hydraCode || ''; data.hydraOutput = q.hydraOutput ?? 0; }
             return data;
           })
-        : s.quads
+        : serializableQuads(s.quads)
     })),
     currentSceneIndex,
     playbackMode
@@ -277,11 +277,21 @@ function applySession(session) {
 
 // --- LOCAL STORAGE ---
 
+// El snapshot en memoria lleva referencias vivas (blob: de archivo local, imágenes
+// del carrusel) que no tienen sentido —ni cabida— en el JSON: al recargar no existen.
+function serializableQuads(quadsData) {
+  return (quadsData || []).map(q => {
+    const { carousel, carouselIndex, ...rest } = q;
+    if (rest.sourceUrl && !rest.sourceUrl.startsWith('http')) delete rest.sourceUrl;
+    return rest;
+  });
+}
+
 function saveToLocalStorage() {
   try {
     snapshotCurrentScene();
     const config = {
-      scenes: scenes.map(s => ({ id: s.id, duration_s: s.duration_s, hydraCode: s.hydraCode || '', quads: s.quads || [] })),
+      scenes: scenes.map(s => ({ id: s.id, duration_s: s.duration_s, hydraCode: s.hydraCode || '', quads: serializableQuads(s.quads) })),
       currentSceneIndex,
       playbackMode
     };
@@ -600,6 +610,11 @@ function handleContextLost(e) {
 function setup() {
   let cnv = createCanvas(windowWidth, windowHeight, WEBGL);
   cnv.elt.addEventListener('webglcontextlost', handleContextLost, false);
+  // El pinch del trackpad llega como wheel con ctrlKey y el navegador lo lee como
+  // zoom de página: cambia windowWidth, dispara windowResized() y el lienzo se
+  // redimensiona, pero los puntos son pixeles y no se reescalan. El mapeo se
+  // descalibra respecto de la superficie física y nada lo avisa.
+  window.addEventListener('wheel', e => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
   cnv.style('position', 'fixed');
   cnv.style('top', '0');
   cnv.style('left', '0');
@@ -768,7 +783,9 @@ function draw() {
   }
 }
 
-function clearQuadSource(index) {
+// revokeLocalUrl=false desmonta el quad sin matar el blob: de un archivo local —
+// lo usa el cambio de escena, donde la fuente tiene que seguir viva para volver.
+function clearQuadSource(index, revokeLocalUrl = true) {
   const quad = quads[index];
   if (quad.sourceType === 'hydra') {
     releaseHydraSlot(quad.hydraOutput);
@@ -779,7 +796,7 @@ function clearQuadSource(index) {
     quad.carouselIndex = 0;
   }
   if (quad.sourceUrl) {
-    if (!quad.sourceUrl.startsWith('http')) URL.revokeObjectURL(quad.sourceUrl);
+    if (revokeLocalUrl && !quad.sourceUrl.startsWith('http')) URL.revokeObjectURL(quad.sourceUrl);
     quad.sourceUrl = null;
   }
   if (quad.sourceVideo) {
@@ -926,6 +943,23 @@ function loadQuadSourceFromUrl(index, url) {
     });
   }
   saveToLocalStorage();
+}
+
+// Rehace el elemento de un archivo local desde su blob:, que vive mientras viva la
+// pestaña. Es el camino de vuelta al cambiar de escena; no sobrevive a recargar.
+function restoreLocalSource(index, url) {
+  const type = quads[index].sourceType;
+  if (type !== 'video' && type !== 'image') return;
+  quads[index].sourceUrl = url;
+  if (type === 'video') {
+    const vid = createVideo(url);
+    vid.hide();
+    vid.volume(0);
+    vid.loop();
+    quads[index].sourceEl = vid;
+  } else {
+    loadImage(url, (img) => { quads[index].sourceEl = img; }, () => { quads[index].sourceEl = null; });
+  }
 }
 
 function addCarouselImage(index) {
@@ -1183,18 +1217,22 @@ function windowResized() {
 function snapshotCurrentScene() {
   if (!scenes[currentSceneIndex]) return;
   scenes[currentSceneIndex].quads = quads.map(q => {
-    const srcUrl = (q.sourceUrl && q.sourceUrl.startsWith('http')) ? q.sourceUrl : null;
+    // El snapshot en memoria guarda también el blob: de un archivo local y las
+    // imágenes del carrusel, para que sobrevivan al ir y volver de escena.
+    // serializableQuads() los quita antes de guardar: no existen tras recargar.
+    const srcUrl = q.sourceUrl || null;
     const data = q.kind === 'freeform'
       ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType }
       : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType };
     if (srcUrl) data.sourceUrl = srcUrl;
     if (q.sourceType === 'hydra') { data.hydraCode = q.hydraCode || ''; data.hydraOutput = q.hydraOutput ?? 0; }
+    if (q.carousel && q.carousel.length) { data.carousel = q.carousel; data.carouselIndex = q.carouselIndex || 0; }
     return data;
   });
 }
 
 function _applySceneData(sceneData) {
-  quads.forEach((_, i) => clearQuadSource(i));
+  quads.forEach((_, i) => clearQuadSource(i, false));
   quads = [];
   hydraSlots = [0, 0, 0, 0];
   const legacyCode = sceneData.hydraCode || '';
@@ -1208,9 +1246,9 @@ function _applySceneData(sceneData) {
       hydraSlots[hydraOutput]++;
     }
     if (q.kind === 'freeform') {
-      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
+      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0 };
     }
-    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
+    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0 };
     buildTessCache(quad);
     return quad;
   });
@@ -1219,6 +1257,8 @@ function _applySceneData(sceneData) {
     const qData = sceneData.quads[i];
     if (qData && qData.sourceUrl && qData.sourceUrl.startsWith('http')) {
       loadQuadSourceFromUrl(i, qData.sourceUrl);
+    } else if (qData && qData.sourceUrl) {
+      restoreLocalSource(i, qData.sourceUrl);
     } else if (q.sourceType === 'camera') {
       startCamera(i);
     } else if (q.sourceType === 'hydra' && q.hydraCode) {
@@ -1246,11 +1286,14 @@ function addScene() {
     id: newId,
     duration_s: current.duration_s,
     hydraCode: current.hydraCode || '',
-    quads: (current.quads || []).map(q =>
-      q.kind === 'freeform'
-        ? { kind: 'freeform', vertices: q.vertices.map(v => ({ x: v.x, y: v.y })), sourceType: q.sourceType, hydraCode: q.hydraCode || '', hydraOutput: q.hydraOutput ?? null }
-        : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType, hydraCode: q.hydraCode || '', hydraOutput: q.hydraOutput ?? null }
-    )
+    // Copia todo lo del quad (fuente incluida) y sólo clona las coordenadas, que
+    // son lo único que la escena nueva debe poder mover por su cuenta.
+    quads: (current.quads || []).map(q => ({
+      ...q,
+      ...(q.kind === 'freeform'
+        ? { vertices: q.vertices.map(v => ({ x: v.x, y: v.y })) }
+        : { points: q.points.map(p => ({ x: p.x, y: p.y })) })
+    }))
   });
   currentSceneIndex = scenes.length - 1;
   _applySceneData(scenes[currentSceneIndex]);
