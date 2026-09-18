@@ -424,15 +424,34 @@ label {
 
 .session-section {
   display: flex;
-  gap: 6px;
+  flex-direction: column;
   margin-top: auto;
   padding-top: 12px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.session-section button {
-  margin-top: 0;
-  flex: 1;
+/* Botón de una frase por renglón: la acción completa cabe escrita, sin depender de que
+   la flecha se interprete bien. El icono va en su propia columna y más tenue, para que
+   lo primero que se lea sea el verbo. */
+.wide-btn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 10px;
+  text-align: left;
+}
+
+.wide-icon {
+  width: 9px;
+  flex: none;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.wide-btn:hover .wide-icon {
+  color: rgba(255, 255, 255, 0.8);
 }
 
 select {

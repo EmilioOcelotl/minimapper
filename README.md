@@ -51,8 +51,8 @@ Las fuentes de video, imagen y cámara no persisten al recargar la página y deb
 
 ## Guardar y cargar sesión
 
-- **↓ Sesión:** descarga un archivo `.json` con el estado completo (código Hydra, vértices e imágenes embebidas)
-- **↑ Sesión:** carga una sesión desde archivo — las imágenes se restauran automáticamente; los videos y la cámara deben recargarse manualmente
+- **↓ Guardar sesión:** descarga un archivo `.json` con el estado completo (código Hydra, vértices e imágenes embebidas)
+- **↑ Cargar sesión:** abre una sesión guardada antes y reemplaza el trabajo en pantalla — las imágenes se restauran automáticamente; los videos y la cámara deben recargarse manualmente
 
 El código Hydra y la posición de los vértices también se auto-guardan en el navegador (localStorage) al hacer cualquier cambio.
 

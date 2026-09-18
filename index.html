@@ -42,7 +42,7 @@
       <p><strong>Mapping:</strong> Arrastra los puntos de control para deformar la superficie. Las esquinas (rojo) están sobre la superficie; los puntos intermedios (amarillo) curvan los bordes. Mantén <strong>M</strong> al hacer clic en cualquier punto para mover toda la superficie en conjunto</p>
       <p><strong>Atajos:</strong> CTRL + SHIFT + H para mostrar/ocultar la UI · ESC para silenciar o cancelar · CTRL + Z para deshacer · M + clic y arrastra para mover toda la superficie</p>
       <p><strong>Auto-guardado:</strong> El código y los vértices se guardan automáticamente (las fuentes de video/imagen se deben recargar al abrir)</p>
-      <p><strong>Sesión:</strong> "↓ Sesión" descarga un archivo JSON con el estado completo (imágenes incluidas). "↑ Sesión" lo restaura — los videos y la cámara se deben recargar manualmente</p>
+      <p><strong>Sesión:</strong> "Guardar sesión" descarga un archivo <code>.json</code> con todo tu trabajo: escenas, superficies, código e imágenes. "Cargar sesión" lo abre otra vez y <em>reemplaza</em> lo que tengas en pantalla — los videos y la cámara se deben recargar manualmente</p>
       <button id="welcome-start" onclick="closeWelcome()">Comenzar →</button>
     </div>
   </div>
@@ -80,12 +80,21 @@
         <button id="pbtn-loop"   class="playback-btn" onclick="setPlaybackMode('loop')"   title="loop">⟳</button>
         <button id="pbtn-random" class="playback-btn" onclick="setPlaybackMode('random')" title="aleatoria">⇄</button>
       </div>
+      <button class="wide-btn" onclick="deleteAllScenes()"
+        title="Deja sólo la escena actual y elimina las demás">
+        <span class="wide-icon">✕</span>Borrar las demás escenas
+      </button>
     </div>
 
 <div class="panel-section session-section">
-      <button onclick="saveSession()" title="Guardar sesión como archivo JSON">↓ Sesión</button>
-      <button onclick="loadSession()" title="Cargar sesión desde archivo JSON">↑ Sesión</button>
-      <button onclick="deleteAllScenes()" title="Eliminar todas las escenas">✕ escenas</button>
+      <button class="wide-btn" onclick="saveSession()"
+        title="Descarga un archivo .json con todas las escenas, superficies y código">
+        <span class="wide-icon">↓</span>Guardar sesión
+      </button>
+      <button class="wide-btn" onclick="loadSession()"
+        title="Abre un archivo .json guardado antes y reemplaza el trabajo actual">
+        <span class="wide-icon">↑</span>Cargar sesión
+      </button>
     </div>
 
   </div>
