@@ -1,0 +1,9 @@
+{
+  "name": "minimapper-imagenes",
+  "private": true,
+  "type": "module",
+  "description": "Capturas de minimapper para el README y el sitio",
+  "dependencies": {
+    "puppeteer-core": "^23.0.0"
+  }
+}

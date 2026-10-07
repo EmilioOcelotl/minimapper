@@ -1,4 +1,4 @@
-![Minimapper](/assets/img/minimapperCaptura.png)
+![MiniMapper: cuatro superficies deformadas, cada una con su propio código de Hydra](/assets/img/minimapper-portada.jpg)
 
 # MiniMapper
 
@@ -10,6 +10,8 @@ Permite generar visuales y proyectarlos sobre superficies deformables con bordes
 
 ## Uso básico
 
+![Modo edición: el panel con el código de cada superficie y los puntos de control a la vista](/assets/img/minimapper-edicion.jpg)
+
 - Haz clic en ✦ (o CTRL + SHIFT + H) para activar el modo edición
 - Crea superficies con **+ Quad** o **+ Libre**
 - Escribe código Hydra en el editor y haz clic en **RUN**
@@ -19,6 +21,9 @@ Permite generar visuales y proyectarlos sobre superficies deformables con bordes
 ## Tipos de superficie
 
 ### Quad
+
+![Un quad en edición: el código de Hydra en el panel, la esquina y el atractor sobre la superficie](/assets/img/minimapper-codigo.jpg)
+
 Superficie cuadrangular con parche Bezier cuadrático (grilla 3×3 de puntos de control).
 
 - Clic en **+ Quad**, luego clic y arrastra en el canvas para definir el área
@@ -37,6 +42,8 @@ Polígono de forma libre con cualquier número de vértices.
 - Mínimo 3 vértices; ESC cancela
 
 ## Fuentes de textura
+
+![Rejilla de calibración en dos superficies y una tercera ya con Hydra](/assets/img/minimapper-calibracion.jpg)
 
 Cada superficie puede usar una fuente distinta, seleccionable con el menú junto a su nombre:
 
