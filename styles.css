@@ -952,12 +952,12 @@ select option {
   border-top: 1px solid rgba(255, 255, 255, 0.07);
   padding-top: 5px;
   display: grid;
-  gap: 3px;
+  gap: 4px;
 }
 
 .quad-color label {
   display: grid;
-  grid-template-columns: 62px 1fr 30px;
+  grid-template-columns: 62px 1fr 36px;
   align-items: center;
   gap: 6px;
   font-size: 10px;
@@ -965,12 +965,41 @@ select option {
 }
 
 .quad-color input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   min-width: 0;
-  height: 2px;
+  height: 12px;
   margin: 0;
-  accent-color: rgba(255, 255, 255, 0.6);
+  background: transparent;
   cursor: pointer;
+}
+
+/* Pista de 2px y círculo de 9px, igual en Chrome y Firefox: el de Firefox por
+   defecto es más grande que el alto de la fila y los deslizadores se enciman. */
+.quad-color input[type="range"]::-webkit-slider-runnable-track {
+  height: 2px;
+  background: rgba(255, 255, 255, 0.2);
+}
+.quad-color input[type="range"]::-moz-range-track {
+  height: 2px;
+  background: rgba(255, 255, 255, 0.2);
+}
+.quad-color input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 9px;
+  height: 9px;
+  margin-top: -3.5px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.75);
+}
+.quad-color input[type="range"]::-moz-range-thumb {
+  width: 9px;
+  height: 9px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.75);
 }
 
 .quad-color input[type="color"] {
@@ -985,6 +1014,7 @@ select option {
 }
 
 .quad-color output {
+  white-space: nowrap;
   font-family: monospace;
   font-size: 10px;
   color: rgba(255, 255, 255, 0.5);
