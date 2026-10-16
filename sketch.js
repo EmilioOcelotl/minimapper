@@ -653,11 +653,11 @@ function tinteRGB(hex) {
 }
 
 // Copia limpia para guardar: sólo si se movió algo, para no ensuciar sesiones viejas.
-// La rampa en curso (c.rampa) no se guarda: es estado, no decisión.
+// El valor aplicado (c.rampa) no se guarda: es estado, no decisión.
 function colorParaGuardar(c) {
   if (colorEsNeutro(c)) return null;
   const out = { nivel: c.nivel, saturacion: c.saturacion, tinte: c.tinte };
-  if (c.senal) Object.assign(out, { senal: c.senal, destino: c.destino || 'nivel', invertir: !!c.invertir, subida: c.subida ?? 1, bajada: c.bajada ?? 2 });
+  if (c.senal) Object.assign(out, { senal: c.senal, destino: c.destino || 'nivel', invertir: !!c.invertir });
   return out;
 }
 
@@ -665,20 +665,16 @@ function setQuadColor(index, campo, valor) {
   const c = quadColor(quads[index]);
   c[campo] = campo === 'tinte' ? valor : parseFloat(valor);
   const out = document.getElementById(`color-${campo}-${index}`);
-  if (out && campo !== 'tinte') out.textContent = campo === 'subida' || campo === 'bajada' ? c[campo].toFixed(1) + ' s' : c[campo].toFixed(2);
+  if (out && campo !== 'tinte') out.textContent = c[campo].toFixed(2);
 }
 
 // Conectar el nivel a una lectura de control/ ('' = manual). Con señal, el deslizador
-// de nivel es el máximo y la rampa decide cuánto de ese máximo sale.
+// de nivel es el máximo y la lectura decide cuánto de ese máximo sale.
 function setQuadSenal(index, senal) {
   pushUndo();
   const c = quadColor(quads[index]);
   c.senal = senal || '';
-  if (c.senal) {
-    if (c.subida == null) c.subida = 1;
-    if (c.bajada == null) c.bajada = 2;
-    if (c.invertir == null) c.invertir = false;
-  }
+  if (c.senal && c.invertir == null) c.invertir = false;
   renderQuadList();
   saveToLocalStorage();
 }
@@ -734,19 +730,17 @@ function sensorVivo() {
   return performance.now() - sensorUltimo < 1500;
 }
 
-// Lo que sale del quad: los valores manuales o, si hay señal, el destino por la rampa.
-// La rampa se acerca a la lectura a velocidad fija: tarda `subida` segundos de 0 a 1 y
-// `bajada` de 1 a 0. Con una lectura de 0/1 (un evento) es la misma rampa de la S9.
+// Lo que sale del quad: los valores manuales o, si hay señal, el destino por la lectura.
+// Sin suavizado: subida y bajada se quitaron mientras se decide cómo darles forma
+// (una envolvente gráfica). Con una lectura de 0/1 (un evento) el cambio es en seco.
 // El deslizador del destino marca el máximo: nivel y saturación se multiplican por la
-// rampa (0 = negro, 0 = gris); el tinte va de blanco (sin teñir) al color elegido.
-function colorEfectivo(c, dt) {
+// lectura (0 = negro, 0 = gris); el tinte va de blanco (sin teñir) al color elegido.
+function colorEfectivo(c) {
   const tinte = tinteRGB(c.tinte);
   if (!c.senal) return { nivel: c.nivel, saturacion: c.saturacion, tinte };
   let meta = sensorVivo() ? (sensor[c.senal] ?? 0) : 0;
   if (c.invertir) meta = 1 - meta;
-  const r = c.rampa ?? 0;
-  const paso = meta > r ? dt / Math.max(c.subida ?? 1, 0.001) : dt / Math.max(c.bajada ?? 2, 0.001);
-  c.rampa = meta > r ? Math.min(meta, r + paso) : Math.max(meta, r - paso);
+  c.rampa = meta;
   const destino = c.destino || 'nivel';
   return {
     nivel: destino === 'nivel' ? c.nivel * c.rampa : c.nivel,
@@ -875,7 +869,7 @@ function draw() {
     if (conShader) {
       shader(colorShader);
       colorShader.setUniform('uTex', tex);
-      const ef = colorEfectivo(quad.color, Math.min(deltaTime, 100) / 1000);
+      const ef = colorEfectivo(quad.color);
       colorShader.setUniform('uNivel', ef.nivel);
       colorShader.setUniform('uSaturacion', ef.saturacion);
       colorShader.setUniform('uTinte', ef.tinte);
@@ -1560,16 +1554,12 @@ function renderQuadList() {
           <option value="" ${!c.senal ? 'selected' : ''}>manual</option>
           ${[...new Set([...Object.keys(sensor), ...(c.senal ? [c.senal] : [])])].map(k =>
             `<option value="${k}" ${c.senal === k ? 'selected' : ''}>${k}</option>`).join('')}
-        </select>${c.senal ? `<output id="color-rampa-${i}" title="rampa">${(c.rampa ?? 0).toFixed(2)}</output>` : '<span></span>'}</label>
+        </select>${c.senal ? `<output id="color-rampa-${i}" title="valor aplicado">${(c.rampa ?? 0).toFixed(2)}</output>` : '<span></span>'}</label>
         ${c.senal ? `
         <label>destino<select onchange="setQuadDestino(${i}, this.value)">
           ${[['nivel', 'nivel'], ['saturacion', 'saturación'], ['tinte', 'tinte']].map(([v, t]) =>
             `<option value="${v}" ${(c.destino || 'nivel') === v ? 'selected' : ''}>${t}</option>`).join('')}
         </select><span></span></label>
-        <label>subida<input type="range" min="0" max="8" step="0.1" value="${c.subida ?? 1}" onpointerdown="undoColor()" onkeydown="undoColor(event)"
-          oninput="setQuadColor(${i},'subida',this.value)" onchange="saveToLocalStorage()"><output id="color-subida-${i}">${(c.subida ?? 1).toFixed(1)} s</output></label>
-        <label>bajada<input type="range" min="0" max="8" step="0.1" value="${c.bajada ?? 2}" onpointerdown="undoColor()" onkeydown="undoColor(event)"
-          oninput="setQuadColor(${i},'bajada',this.value)" onchange="saveToLocalStorage()"><output id="color-bajada-${i}">${(c.bajada ?? 2).toFixed(1)} s</output></label>
         <label>invertir<button class="${c.invertir ? 'activo' : ''}" onclick="toggleQuadInvertir(${i})">${c.invertir ? 'sí' : 'no'}</button><span></span></label>` : ''}
       </div>`;
 
