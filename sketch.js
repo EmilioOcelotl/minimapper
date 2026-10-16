@@ -5,8 +5,10 @@ let showHint = true;
 
 // index.html?salida es la ventana que va al proyector: sólo el resultado. Nunca
 // entra a edición, no muestra ✦, hint, ayuda, HUD ni cursor, ignora el teclado y
-// no escribe en localStorage, para no pisar lo que se edita en otra ventana.
+// no escribe en localStorage, para no pisar lo que se edita en otra ventana. Empieza a
+// guardar cuando control/ le manda el primer color: desde ahí es la dueña del estado.
 const SALIDA = new URLSearchParams(location.search).has('salida');
+let salidaGuarda = false;
 
 function toggleEditMode() {
   if (SALIDA) return;
@@ -309,7 +311,8 @@ function serializableQuads(quadsData) {
 }
 
 function saveToLocalStorage() {
-  if (SALIDA) return;
+  publicarEstado();   // un color movido en el panel también le llega a control/
+  if (SALIDA && !salidaGuarda) return;
   try {
     snapshotCurrentScene();
     const config = {
@@ -778,6 +781,86 @@ setInterval(() => {
     if (out && q.color && q.color.senal) out.textContent = (q.color.rampa ?? 0).toFixed(2);
   });
 }, 200);
+
+// --- CONTROL: EDICIÓN DESDE OTRA VENTANA ---
+// Un canal aparte de las lecturas, que tienen el contrato fijo. minimapper publica qué
+// quads hay y su color; control/ los muestra y manda cambios. La dueña del estado es
+// esta ventana: control no guarda nada, y cerrarlo no pierde nada. Ver control/NOTAS.md.
+//   control → { tipo: 'pedir' }                      (al abrir y cada 2 s)
+//   aquí    → { tipo: 'estado', ventana, salida, escena, numero, quads: [{ i, nombre, fuente, color }] }
+//   control → { tipo: 'color', escena, i, cambios: { nivel: 0.8 }, inicio }
+// `ventana` es un id por pestaña: si control oye a dos, avisa.
+
+const EDICION_CANAL = 'minimapper-edicion';
+const VENTANA_ID = Math.random().toString(36).slice(2, 10);
+let canalEdicion = null;
+let estadoPendiente = false;
+let guardarRemoto = null;
+
+function estadoParaControl() {
+  return {
+    tipo: 'estado', ventana: VENTANA_ID, salida: SALIDA,
+    escena: scenes[currentSceneIndex]?.id, numero: currentSceneIndex + 1,
+    quads: quads.map((q, i) => {
+      const c = quadColor(q);
+      return {
+        i, nombre: `${q.kind === 'freeform' ? 'Libre' : 'Quad'} ${i}`, fuente: q.sourceType,
+        color: { nivel: c.nivel, saturacion: c.saturacion, tinte: c.tinte,
+                 senal: c.senal || '', destino: c.destino || 'nivel', invertir: !!c.invertir },
+      };
+    }),
+  };
+}
+
+// Se junta en un solo mensaje lo que cambie en el mismo instante (renderQuadList se
+// llama varias veces seguidas al montar una escena).
+function publicarEstado() {
+  if (!canalEdicion || estadoPendiente) return;
+  estadoPendiente = true;
+  setTimeout(() => {
+    estadoPendiente = false;
+    canalEdicion.postMessage(estadoParaControl());
+  }, 50);
+}
+
+// Mismas reglas que el panel: rangos de los deslizadores, sólo nombres simples de lectura.
+// Un mensaje para otra escena o un quad que ya no existe se descarta, y el estado que se
+// publica en respuesta corrige a control.
+function aplicarColorRemoto(m) {
+  const quad = quads[m.i];
+  if (m.escena !== scenes[currentSceneIndex]?.id || !quad || !m.cambios) { publicarEstado(); return; }
+  const ch = m.cambios;
+  const c = quadColor(quad);
+  const num = (v, max) => (typeof v === 'number' && isFinite(v)) ? Math.min(max, Math.max(0, v)) : null;
+  if (m.inicio) pushUndo();
+  let estructura = false;
+  if ('nivel' in ch && num(ch.nivel, 1.5) != null) setQuadColor(m.i, 'nivel', num(ch.nivel, 1.5));
+  if ('saturacion' in ch && num(ch.saturacion, 2) != null) setQuadColor(m.i, 'saturacion', num(ch.saturacion, 2));
+  if ('tinte' in ch && /^#[0-9a-f]{6}$/i.test(ch.tinte)) setQuadColor(m.i, 'tinte', ch.tinte);
+  if ('senal' in ch && (ch.senal === '' || /^[a-z_][a-z0-9_]*$/i.test(ch.senal))) {
+    c.senal = ch.senal;
+    if (c.senal && c.invertir == null) c.invertir = false;
+    estructura = true;
+  }
+  if ('destino' in ch && ['nivel', 'saturacion', 'tinte'].includes(ch.destino)) { c.destino = ch.destino; estructura = true; }
+  if ('invertir' in ch && typeof ch.invertir === 'boolean') { c.invertir = ch.invertir; estructura = true; }
+  salidaGuarda = true;
+  // Guardar y redibujar el panel al soltar, no en cada paso del arrastre.
+  clearTimeout(guardarRemoto);
+  guardarRemoto = setTimeout(() => { saveToLocalStorage(); renderQuadList(); }, estructura ? 0 : 300);
+}
+
+try {
+  canalEdicion = new BroadcastChannel(EDICION_CANAL);
+  canalEdicion.onmessage = (e) => {
+    const m = e.data;
+    if (!m) return;
+    if (m.tipo === 'pedir') publicarEstado();
+    else if (m.tipo === 'color') aplicarColorRemoto(m);
+  };
+} catch (e) {
+  canalEdicion = null;
+}
 
 // Un snapshot por gesto (al apretar el deslizador o una tecla), no por cada paso del arrastre.
 function undoColor(e) {
@@ -1603,6 +1686,8 @@ function renderQuadList() {
 
     container.appendChild(div);
   });
+  // Todo cambio de quads pasa por aquí: escena, fuente, alta, baja, señal, deshacer.
+  publicarEstado();
 }
 
 // --- INTERACCIÓN ---

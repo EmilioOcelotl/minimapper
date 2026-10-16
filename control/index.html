@@ -55,6 +55,17 @@
     .canal span::before { content: '●'; margin-right: 6px; }
     .canal span.vivo::before { color: var(--evento); }
     a { color: var(--texto); }
+    .superficies { margin-top: 28px; }
+    #aviso { color: #ff7a5c; font-size: 12px; margin: 0 0 10px; max-width: 70ch; }
+    #sinMinimapper { font-size: 12px; }
+    .sups { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px 20px; }
+    .sup { border-top: 1px solid var(--linea); padding-top: 8px; }
+    .sup h3 { font-size: 12px; font-weight: 500; margin: 0; display: flex; justify-content: space-between; }
+    .sup h3 span { color: var(--tenue); font-weight: 400; }
+    .sup label { margin-top: 8px; }
+    .sup select { background: #1a1a1a; color: var(--texto); border: 1px solid rgba(255, 255, 255, 0.15); font: inherit; font-size: 12px; }
+    .sup input[type=color] { width: 100%; height: 22px; padding: 0; border: 1px solid rgba(255, 255, 255, 0.15); background: none; }
+    .sup button.activo { border-color: var(--evento); color: var(--evento); }
   </style>
 </head>
 <body>
@@ -66,6 +77,7 @@
       En cada quad, el nivel, la saturación o el tinte pueden conectarse a una lectura.
       En Hydra se leen como <code>() =&gt; sensor.cercania</code>.
       Como el video de YouTube que se comparte con Pantalla, pero en vez de una imagen viaja un número.
+      Abajo, el color de cada superficie se mueve desde aquí, para que el proyector sólo muestre el resultado.
     </p>
 
     <div class="rejilla">
@@ -85,6 +97,15 @@
         <div class="canal"><span id="canal">sin minimapper que escuche todavía</span></div>
       </div>
     </div>
+
+    <section class="superficies">
+      <h2>Superficies <span id="escenaInfo"></span></h2>
+      <p id="aviso" hidden></p>
+      <p id="sinMinimapper">Abre <a href="../?salida" target="minimapper">minimapper en modo salida</a>
+        y llévalo al proyector: aquí aparecen sus quads. Con una sola pantalla, usa
+        <a href="../" target="minimapper">minimapper</a> solo.</p>
+      <div class="sups" id="sups"></div>
+    </section>
   </main>
 
   <script type="module">
@@ -232,7 +253,128 @@
     }
     requestAnimationFrame(cuadro)
 
-    // minimapper no contesta por el canal; esto sólo dice si hay lectura en curso.
+    // --- Superficies: el color de cada quad, editado desde aquí ---
+    // control no guarda nada: pide el estado a minimapper, lo muestra y manda cambios.
+    // La dueña es la ventana de minimapper. Contrato en minimapper/sketch.js, "EDICIÓN
+    // DESDE OTRA VENTANA".
+    const edicion = new BroadcastChannel('minimapper-edicion')
+    const FUENTES = { grid: 'rejilla', hydra: 'hydra', video: 'video', image: 'imagen', camera: 'cámara', pantalla: 'pantalla', carousel: 'carrusel' }
+    const DESTINOS = [['nivel', 'nivel'], ['saturacion', 'saturación'], ['tinte', 'tinte']]
+    const ventanas = new Map()   // id de ventana → { visto, salida }
+    let ultimo_estado = null, clave = '', arrastrando = false, gestoNuevo = false
+    const sups = document.getElementById('sups')
+
+    edicion.onmessage = e => {
+      const m = e.data
+      if (!m || m.tipo !== 'estado') return
+      ventanas.set(m.ventana, { visto: performance.now(), salida: m.salida })
+      ultimo_estado = m
+      pintar()
+    }
+    const pedir = () => edicion.postMessage({ tipo: 'pedir' })
+    pedir()
+    setInterval(pedir, 2000)
+
+    function mandar (i, cambios, inicio) {
+      if (!ultimo_estado) return
+      Object.assign(ultimo_estado.quads[i].color, cambios)
+      edicion.postMessage({ tipo: 'color', escena: ultimo_estado.escena, i, cambios, inicio })
+    }
+
+    // Lo que cambia la forma del panel. Si sólo cambian valores, se actualizan en su
+    // lugar, y nunca el deslizador que se está moviendo.
+    const claveDe = m => JSON.stringify([m.escena, m.quads.map(q => [q.nombre, q.fuente, q.color.senal, q.color.destino, q.color.invertir])])
+
+    function pintar () {
+      const m = ultimo_estado
+      document.getElementById('escenaInfo').textContent = m ? `· escena ${m.numero}` : ''
+      const k = m ? claveDe(m) : ''
+      if (k !== clave) {
+        clave = k
+        sups.innerHTML = m ? m.quads.map(htmlSup).join('') : ''
+        if (m && !m.quads.length) sups.innerHTML = '<p>Esta escena no tiene superficies todavía.</p>'
+        return
+      }
+      if (!m || arrastrando) return
+      m.quads.forEach(q => {
+        for (const campo of ['nivel', 'saturacion', 'tinte']) {
+          const el = sups.querySelector(`[data-i="${q.i}"][data-campo="${campo}"]`)
+          if (!el || el === document.activeElement) continue
+          el.value = q.color[campo]
+          if (campo !== 'tinte') el.nextElementSibling.textContent = q.color[campo].toFixed(2)
+        }
+      })
+    }
+
+    function htmlSup (q) {
+      const c = q.color
+      const lecturas = [...new Set([...LECTURAS.map(l => l.nombre), ...(c.senal ? [c.senal] : [])])]
+      const rango = (campo, texto, max) => `<label>${texto}<input type="range" min="0" max="${max}" step="0.01" value="${c[campo]}"
+        data-i="${q.i}" data-campo="${campo}"><output>${c[campo].toFixed(2)}</output></label>`
+      return `<div class="sup">
+        <h3>${q.nombre} <span>${FUENTES[q.fuente] || q.fuente}</span></h3>
+        ${rango('nivel', 'nivel', 1.5)}
+        ${rango('saturacion', 'saturación', 2)}
+        <label>tinte<input type="color" value="${c.tinte}" data-i="${q.i}" data-campo="tinte"><button data-i="${q.i}" data-accion="neutro" title="Volver a los valores neutros">↺</button></label>
+        <label>señal<select data-i="${q.i}" data-campo="senal">
+          <option value="" ${!c.senal ? 'selected' : ''}>manual</option>
+          ${lecturas.map(n => `<option value="${n}" ${c.senal === n ? 'selected' : ''}>${n}</option>`).join('')}
+        </select><span></span></label>
+        ${c.senal ? `
+        <label>destino<select data-i="${q.i}" data-campo="destino">
+          ${DESTINOS.map(([v, t]) => `<option value="${v}" ${c.destino === v ? 'selected' : ''}>${t}</option>`).join('')}
+        </select><span></span></label>
+        <label>invertir<button data-i="${q.i}" data-accion="invertir" class="${c.invertir ? 'activo' : ''}">${c.invertir ? 'sí' : 'no'}</button><span></span></label>` : ''}
+      </div>`
+    }
+
+    // Un gesto = un paso de Ctrl+Z en minimapper: `inicio` va en el primer mensaje.
+    sups.addEventListener('pointerdown', e => {
+      if (e.target.dataset.campo) { gestoNuevo = true; arrastrando = true }
+    })
+    window.addEventListener('pointerup', () => { arrastrando = false })
+    sups.addEventListener('keydown', e => { if (!e.repeat) gestoNuevo = true })
+    sups.addEventListener('input', e => {
+      const el = e.target, campo = el.dataset.campo
+      if (!['nivel', 'saturacion', 'tinte'].includes(campo)) return
+      const v = campo === 'tinte' ? el.value : parseFloat(el.value)
+      if (campo !== 'tinte') el.nextElementSibling.textContent = v.toFixed(2)
+      mandar(+el.dataset.i, { [campo]: v }, gestoNuevo)
+      gestoNuevo = false
+    })
+    sups.addEventListener('change', e => {
+      const el = e.target, campo = el.dataset.campo
+      if (campo !== 'senal' && campo !== 'destino') return
+      mandar(+el.dataset.i, { [campo]: el.value }, true)
+      pintar()
+    })
+    sups.addEventListener('click', e => {
+      const el = e.target.closest('button[data-accion]')
+      if (!el) return
+      const i = +el.dataset.i
+      if (el.dataset.accion === 'invertir') mandar(i, { invertir: !ultimo_estado.quads[i].color.invertir }, true)
+      else mandar(i, { nivel: 1, saturacion: 1, tinte: '#ffffff', senal: '' }, true)
+      clave = ''   // fuerza a redibujar: los valores cambiaron de golpe
+      pintar()
+    })
+
+    // Quién escucha: una ventana que no contesta en 5 s se da por cerrada. Dos a la vez
+    // reciben el mismo color y las dos guardan, y la que guarda al último pisa los
+    // vértices que se movieron en la otra.
+    setInterval(() => {
+      const ahora = performance.now()
+      for (const [id, v] of ventanas) if (ahora - v.visto > 5000) ventanas.delete(id)
+      if (!ventanas.size && ultimo_estado) { ultimo_estado = null; pintar() }
+      document.getElementById('sinMinimapper').hidden = ventanas.size > 0
+      const aviso = document.getElementById('aviso')
+      aviso.hidden = ventanas.size < 2
+      if (ventanas.size > 1) {
+        const cuales = [...ventanas.values()].map(v => v.salida ? '?salida' : 'minimapper').join(' y ')
+        aviso.textContent = `Hay ${ventanas.size} ventanas de minimapper abiertas (${cuales}). Las dos reciben el color y las dos guardan: si mueves vértices en una, la otra los pisa al guardar. Deja abierta sólo la que proyecta.`
+      }
+    }, 1000)
+
+    // Esto sólo dice si hay lectura en curso.
     setInterval(() => {
       const el = document.getElementById('canal')
       const vivo = detector && video.readyState >= 2
