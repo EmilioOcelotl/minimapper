@@ -382,10 +382,12 @@ const undoStack = [];
 const UNDO_LIMIT = 20;
 
 function pushUndo() {
+  // El color entra al snapshot sin la rampa en curso: es estado, no decisión.
+  const color = (q) => { if (!q.color) return null; const { rampa, ...c } = q.color; return c; };
   undoStack.push(quads.map(q =>
     q.kind === 'freeform'
-      ? { kind: 'freeform', data: q.vertices.map(v => ({ x: v.x, y: v.y })) }
-      : { kind: 'quad',     data: q.points.map(p => ({ x: p.x, y: p.y })) }
+      ? { kind: 'freeform', data: q.vertices.map(v => ({ x: v.x, y: v.y })), color: color(q) }
+      : { kind: 'quad',     data: q.points.map(p => ({ x: p.x, y: p.y })), color: color(q) }
   ));
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
 }
@@ -401,7 +403,9 @@ function undo() {
       quads[qi].points = entry.data.map(p => createVector(p.x, p.y));
       buildTessCache(quads[qi]);
     }
+    if (entry.color) quads[qi].color = { ...entry.color, rampa: quads[qi].color?.rampa };
   });
+  renderQuadList();
   saveToLocalStorage();
 }
 
@@ -637,11 +641,14 @@ function quadColor(quad) {
 }
 
 function colorEsNeutro(c) {
-  return !c || (c.nivel === 1 && c.saturacion === 1 && (c.tinte || '#ffffff').toLowerCase() === '#ffffff' && !c.senal);
+  return !c || (c.nivel === 1 && c.saturacion === 1 && /^#?(fff|ffffff)?$/i.test(c.tinte || '') && !c.senal);
 }
 
 function tinteRGB(hex) {
-  const n = parseInt((hex || '#ffffff').slice(1), 16);
+  let h = (hex || '#ffffff').slice(1);
+  if (h.length === 3) h = h.replace(/./g, d => d + d);   // #fff → #ffffff
+  const n = parseInt(h, 16);
+  if (!isFinite(n)) return [1, 1, 1];
   return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
 }
 
@@ -664,6 +671,7 @@ function setQuadColor(index, campo, valor) {
 // Conectar el nivel a una lectura de control/ ('' = manual). Con señal, el deslizador
 // de nivel es el máximo y la rampa decide cuánto de ese máximo sale.
 function setQuadSenal(index, senal) {
+  pushUndo();
   const c = quadColor(quads[index]);
   c.senal = senal || '';
   if (c.senal) {
@@ -676,6 +684,7 @@ function setQuadSenal(index, senal) {
 }
 
 function toggleQuadInvertir(index) {
+  pushUndo();
   const c = quadColor(quads[index]);
   c.invertir = !c.invertir;
   renderQuadList();
@@ -725,7 +734,7 @@ function nivelEfectivo(c, dt) {
   if (!c.senal) return c.nivel;
   let meta = sensorVivo() ? (sensor[c.senal] ?? 0) : 0;
   if (c.invertir) meta = 1 - meta;
-  const r = c.rampa ?? meta;
+  const r = c.rampa ?? 0;
   const paso = meta > r ? dt / Math.max(c.subida ?? 1, 0.001) : dt / Math.max(c.bajada ?? 2, 0.001);
   c.rampa = meta > r ? Math.min(meta, r + paso) : Math.max(meta, r - paso);
   return c.nivel * c.rampa;
@@ -746,7 +755,14 @@ setInterval(() => {
   });
 }, 200);
 
+// Un snapshot por gesto (al apretar el deslizador o una tecla), no por cada paso del arrastre.
+function undoColor(e) {
+  if (e && e.repeat) return;
+  pushUndo();
+}
+
 function resetQuadColor(index) {
+  pushUndo();
   quads[index].color = { ...COLOR_NEUTRO };
   renderQuadList();
   saveToLocalStorage();
@@ -1518,11 +1534,11 @@ function renderQuadList() {
 
     const c = quadColor(q);
     const colorSection = `<div class="quad-color">
-        <label>nivel<input type="range" min="0" max="1.5" step="0.01" value="${c.nivel}"
+        <label>nivel<input type="range" min="0" max="1.5" step="0.01" value="${c.nivel}" onpointerdown="undoColor()" onkeydown="undoColor(event)"
           oninput="setQuadColor(${i},'nivel',this.value)" onchange="saveToLocalStorage()"><output id="color-nivel-${i}">${c.nivel.toFixed(2)}</output></label>
-        <label>saturación<input type="range" min="0" max="2" step="0.01" value="${c.saturacion}"
+        <label>saturación<input type="range" min="0" max="2" step="0.01" value="${c.saturacion}" onpointerdown="undoColor()" onkeydown="undoColor(event)"
           oninput="setQuadColor(${i},'saturacion',this.value)" onchange="saveToLocalStorage()"><output id="color-saturacion-${i}">${c.saturacion.toFixed(2)}</output></label>
-        <label>tinte<input type="color" value="${c.tinte}"
+        <label>tinte<input type="color" value="${c.tinte}" onclick="undoColor()"
           oninput="setQuadColor(${i},'tinte',this.value)" onchange="saveToLocalStorage()"><button onclick="resetQuadColor(${i})" title="Volver a los valores neutros">↺</button></label>
         <label>señal<select onchange="setQuadSenal(${i}, this.value)">
           <option value="" ${!c.senal ? 'selected' : ''}>manual</option>
@@ -1530,9 +1546,9 @@ function renderQuadList() {
             `<option value="${k}" ${c.senal === k ? 'selected' : ''}>${k}</option>`).join('')}
         </select>${c.senal ? `<output id="color-rampa-${i}" title="rampa">${(c.rampa ?? 0).toFixed(2)}</output>` : '<span></span>'}</label>
         ${c.senal ? `
-        <label>subida<input type="range" min="0" max="8" step="0.1" value="${c.subida ?? 1}"
+        <label>subida<input type="range" min="0" max="8" step="0.1" value="${c.subida ?? 1}" onpointerdown="undoColor()" onkeydown="undoColor(event)"
           oninput="setQuadColor(${i},'subida',this.value)" onchange="saveToLocalStorage()"><output id="color-subida-${i}">${(c.subida ?? 1).toFixed(1)} s</output></label>
-        <label>bajada<input type="range" min="0" max="8" step="0.1" value="${c.bajada ?? 2}"
+        <label>bajada<input type="range" min="0" max="8" step="0.1" value="${c.bajada ?? 2}" onpointerdown="undoColor()" onkeydown="undoColor(event)"
           oninput="setQuadColor(${i},'bajada',this.value)" onchange="saveToLocalStorage()"><output id="color-bajada-${i}">${(c.bajada ?? 2).toFixed(1)} s</output></label>
         <label>invertir<button class="${c.invertir ? 'activo' : ''}" onclick="toggleQuadInvertir(${i})">${c.invertir ? 'sí' : 'no'}</button><span></span></label>` : ''}
       </div>`;

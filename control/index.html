@@ -126,12 +126,24 @@
     }
 
     // Crea el detector en la GPU; si no hay, en la CPU.
-    let detector = null
-    async function cargar () {
-      if (detector) return
-      avisar('cargando el modelo… la primera vez tarda unos segundos')
-      const vision = await import(MP + '/vision_bundle.mjs')
-      const fileset = await vision.FilesetResolver.forVisionTasks(MP + '/wasm')
+    // Una sola carga aunque se pulse dos veces: la promesa se comparte, y si falla se
+    // borra para poder intentar de nuevo.
+    let detector = null, cargando = null
+    function cargar () {
+      if (!cargando) {
+        avisar('cargando el modelo… la primera vez tarda unos segundos')
+        cargando = crear().catch(e => { cargando = null; throw e })
+      }
+      return cargando
+    }
+    async function crear () {
+      let vision, fileset
+      try {
+        vision = await import(MP + '/vision_bundle.mjs')
+        fileset = await vision.FilesetResolver.forVisionTasks(MP + '/wasm')
+      } catch (e) {
+        throw new Error('no se pudo bajar el modelo. Control necesita internet la primera vez; después queda guardado en el navegador')
+      }
       const opciones = delegate => ({ baseOptions: { modelAssetPath: MODELO, delegate }, runningMode: 'VIDEO' })
       try {
         detector = await vision.FaceDetector.createFromOptions(fileset, opciones('GPU'))
@@ -213,7 +225,9 @@
         document.getElementById('b-' + l.nombre).style.width = (v * 100) + '%'
       }
 
-      canal.postMessage({ lecturas: valores })
+      // Sólo se publica con lectura en curso: antes de encender la cámara, minimapper
+      // no debe creer que hay alguien a 0.00.
+      if (listo) canal.postMessage({ lecturas: valores })
       requestAnimationFrame(cuadro)
     }
     requestAnimationFrame(cuadro)

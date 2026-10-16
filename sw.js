@@ -12,7 +12,7 @@
 // Para forzar que todos reciban una versión nueva de los archivos, sube
 // CACHE_VERSION. El activate borra los cachés viejos.
 
-const CACHE_VERSION = 'minimapper-v11';
+const CACHE_VERSION = 'minimapper-v12';
 
 // Archivos locales que se precachean al instalar. Rutas relativas para que
 // funcione tanto en la raíz como en un subdirectorio (GitHub Pages: /minimapper/).
@@ -39,7 +39,9 @@ self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_VERSION);
     // El app shell es obligatorio: si algo aquí falla, la instalación falla.
-    await cache.addAll(APP_SHELL);
+    // cache: 'reload' salta la caché HTTP (Pages da max-age=600): sin eso, una versión
+    // nueva del worker podía precachear el sketch.js viejo de hace unos minutos.
+    await cache.addAll(APP_SHELL.map((u) => new Request(u, { cache: 'reload' })));
     // El CDN es best-effort: cada uno por separado, sin tumbar el install.
     await Promise.allSettled(
       CDN_ASSETS.map((url) =>
