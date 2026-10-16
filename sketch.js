@@ -688,7 +688,9 @@ function toggleQuadInvertir(index) {
 // en la carpeta del repo (no file://). Aquí se guardan en el global `sensor`, que
 // Hydra puede leer: osc(10, 0.1, () => sensor.cercania * 2).out(o0)
 
-var sensor = {};
+// Arranca con las lecturas de control/ en 0: así un sketch con () => sensor.cercania
+// funciona aunque control no esté abierto, y la lista no se redibuja al llegar la primera.
+var sensor = { cercania: 0, cerca: 0 };
 let sensorUltimo = 0;
 const SENSOR_CANAL = 'minimapper-control';
 
@@ -699,7 +701,8 @@ try {
     if (!lecturas) return;
     let nuevas = false;
     for (const [k, v] of Object.entries(lecturas)) {
-      if (typeof v !== 'number' || !isFinite(v)) continue;
+      // Sólo nombres simples: el nombre termina dentro del HTML de los selectores.
+      if (!/^[a-z_][a-z0-9_]*$/i.test(k) || typeof v !== 'number' || !isFinite(v)) continue;
       if (!(k in sensor)) nuevas = true;
       sensor[k] = Math.min(1, Math.max(0, v));
     }
@@ -736,7 +739,7 @@ setInterval(() => {
   el.classList.toggle('vivo', vivo);
   el.textContent = vivo
     ? 'control · ' + claves.map(k => `${k} ${sensor[k].toFixed(2)}`).join(' · ')
-    : (claves.length ? 'control · sin señal' : 'control · abre control/ en otra ventana');
+    : (sensorUltimo ? 'control · sin señal' : 'control · abre control/ en otra ventana');
   quads.forEach((q, i) => {
     const out = document.getElementById(`color-rampa-${i}`);
     if (out && q.color && q.color.senal) out.textContent = (q.color.rampa ?? 0).toFixed(2);
@@ -1527,10 +1530,10 @@ function renderQuadList() {
             `<option value="${k}" ${c.senal === k ? 'selected' : ''}>${k}</option>`).join('')}
         </select>${c.senal ? `<output id="color-rampa-${i}" title="rampa">${(c.rampa ?? 0).toFixed(2)}</output>` : '<span></span>'}</label>
         ${c.senal ? `
-        <label>subida<input type="range" min="0" max="8" step="0.1" value="${c.subida}"
-          oninput="setQuadColor(${i},'subida',this.value)" onchange="saveToLocalStorage()"><output id="color-subida-${i}">${c.subida.toFixed(1)} s</output></label>
-        <label>bajada<input type="range" min="0" max="8" step="0.1" value="${c.bajada}"
-          oninput="setQuadColor(${i},'bajada',this.value)" onchange="saveToLocalStorage()"><output id="color-bajada-${i}">${c.bajada.toFixed(1)} s</output></label>
+        <label>subida<input type="range" min="0" max="8" step="0.1" value="${c.subida ?? 1}"
+          oninput="setQuadColor(${i},'subida',this.value)" onchange="saveToLocalStorage()"><output id="color-subida-${i}">${(c.subida ?? 1).toFixed(1)} s</output></label>
+        <label>bajada<input type="range" min="0" max="8" step="0.1" value="${c.bajada ?? 2}"
+          oninput="setQuadColor(${i},'bajada',this.value)" onchange="saveToLocalStorage()"><output id="color-bajada-${i}">${(c.bajada ?? 2).toFixed(1)} s</output></label>
         <label>invertir<button class="${c.invertir ? 'activo' : ''}" onclick="toggleQuadInvertir(${i})">${c.invertir ? 'sí' : 'no'}</button><span></span></label>` : ''}
       </div>`;
 
