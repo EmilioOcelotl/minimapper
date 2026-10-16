@@ -66,6 +66,9 @@
     .sup select { background: #1a1a1a; color: var(--texto); border: 1px solid rgba(255, 255, 255, 0.15); font: inherit; font-size: 12px; }
     .sup input[type=color] { width: 100%; height: 22px; padding: 0; border: 1px solid rgba(255, 255, 255, 0.15); background: none; }
     .sup button.activo { border-color: var(--evento); color: var(--evento); }
+    #mapa { width: 100%; display: block; background: #050505; border: 1px solid var(--linea); touch-action: none; }
+    .ayuda-mapa { font-size: 11px; color: var(--tenue); margin: 6px 0 18px; }
+    .ayuda-mapa button { margin-right: 8px; }
   </style>
 </head>
 <body>
@@ -77,7 +80,7 @@
       En cada quad, el nivel, la saturación o el tinte pueden conectarse a una lectura.
       En Hydra se leen como <code>() =&gt; sensor.cercania</code>.
       Como el video de YouTube que se comparte con Pantalla, pero en vez de una imagen viaja un número.
-      Abajo, el color de cada superficie se mueve desde aquí, para que el proyector sólo muestre el resultado.
+      Abajo, los vértices y el color de cada superficie se mueven desde aquí, para que el proyector sólo muestre el resultado.
     </p>
 
     <div class="rejilla">
@@ -104,6 +107,10 @@
       <p id="sinMinimapper">Abre <a href="../?salida" target="minimapper">minimapper en modo salida</a>
         y llévalo al proyector: aquí aparecen sus quads. Con una sola pantalla, usa
         <a href="../" target="minimapper">minimapper</a> solo.</p>
+      <canvas id="mapa" aria-label="Las superficies de minimapper, para mover sus vértices"></canvas>
+      <div class="ayuda-mapa"><button id="btnDeshacer" type="button" title="Ctrl+Z">↶ deshacer</button>
+        Arrastra un punto: rojo, una esquina; amarillo, curva el borde. Con <code>M</code> apretada mueves la superficie entera.
+        El rectángulo es el encuadre del proyector: lo que queda afuera no se ve.</div>
       <div class="sups" id="sups"></div>
     </section>
   </main>
@@ -268,6 +275,10 @@
       const m = e.data
       if (!m || m.tipo !== 'estado') return
       ventanas.set(m.ventana, { visto: performance.now(), salida: m.salida })
+      // Mientras se arrastra, los puntos de ese quad son los de aquí: el estado que llega
+      // puede venir un paso atrás.
+      const q = tomado && ultimo_estado?.escena === m.escena && m.quads[tomado.i]
+      if (q && q.puntos.length === ultimo_estado.quads[tomado.i]?.puntos.length) q.puntos = ultimo_estado.quads[tomado.i].puntos
       ultimo_estado = m
       pintar()
     }
@@ -287,6 +298,7 @@
 
     function pintar () {
       const m = ultimo_estado
+      pintarMapa()
       document.getElementById('escenaInfo').textContent = m ? `· escena ${m.numero}` : ''
       const k = m ? claveDe(m) : ''
       if (k !== clave) {
@@ -357,6 +369,172 @@
       clave = ''   // fuerza a redibujar: los valores cambiaron de golpe
       pintar()
     })
+
+    // --- Mapeo: los vértices de cada quad, editados desde aquí ---
+    // Se dibuja la geometría, como las miniaturas de escena, a la escala del lienzo de
+    // minimapper (`lienzo`), con un margen para alcanzar los puntos que quedaron fuera del
+    // encuadre. Se manda la lista entera de puntos del quad; minimapper hace un paso de
+    // Ctrl+Z por gesto (`inicio`) y guarda al soltar.
+    const mapa = document.getElementById('mapa')
+    const mctx = mapa.getContext('2d')
+    const MARGEN = 0.08, RADIO = 10
+    const ESQUINAS = new Set([0, 2, 6, 8])
+    let tomado = null   // { i, k, mover, antes: {x,y} } mientras se arrastra
+    let teclaM = false
+
+    // Parche Bezier cuadrático, el mismo evalPatch() de minimapper.
+    function enParche (p, u, v) {
+      const bu = [(1 - u) ** 2, 2 * u * (1 - u), u * u], bv = [(1 - v) ** 2, 2 * v * (1 - v), v * v]
+      let x = 0, y = 0
+      for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) { x += bu[i] * bv[j] * p[j * 3 + i].x; y += bu[i] * bv[j] * p[j * 3 + i].y }
+      return { x, y }
+    }
+
+    // De coordenadas de minimapper (centradas) a pixeles del mapa, y de vuelta.
+    function escala () {
+      const L = ultimo_estado?.lienzo || { w: 16, h: 9 }
+      const w = mapa.clientWidth, h = w * L.h / L.w
+      const s = w * (1 - 2 * MARGEN) / L.w
+      return {
+        L, w, h, s,
+        aMapa: p => ({ x: w * MARGEN + (p.x + L.w / 2) * s, y: h * MARGEN + (p.y + L.h / 2) * s }),
+        aLienzo: (x, y) => ({ x: (x - w * MARGEN) / s - L.w / 2, y: (y - h * MARGEN) / s - L.h / 2 }),
+      }
+    }
+
+    function pintarMapa () {
+      const e = escala()
+      const dpr = devicePixelRatio || 1
+      if (mapa.width !== Math.round(e.w * dpr) || mapa.height !== Math.round(e.h * dpr)) {
+        mapa.width = Math.round(e.w * dpr)
+        mapa.height = Math.round(e.h * dpr)
+        mapa.style.height = e.h + 'px'
+      }
+      const c = mctx
+      c.setTransform(dpr, 0, 0, dpr, 0, 0)
+      c.fillStyle = '#050505'
+      c.fillRect(0, 0, e.w, e.h)
+      const o = e.aMapa({ x: -e.L.w / 2, y: -e.L.h / 2 })
+      c.fillStyle = '#000'
+      c.fillRect(o.x, o.y, e.L.w * e.s, e.L.h * e.s)
+      c.strokeStyle = 'rgba(255,255,255,0.3)'
+      c.lineWidth = 1
+      c.strokeRect(o.x + 0.5, o.y + 0.5, e.L.w * e.s - 1, e.L.h * e.s - 1)
+      if (!ultimo_estado) {
+        c.fillStyle = 'rgba(255,255,255,0.35)'
+        c.font = '12px ui-monospace, monospace'
+        c.textAlign = 'center'
+        c.fillText('sin minimapper abierto', e.w / 2, e.h / 2)
+        return
+      }
+
+      ultimo_estado.quads.forEach(q => {
+        const hue = (q.i * 73 + 180) % 360
+        const p = q.puntos.map(e.aMapa)
+        // contorno: el borde del parche, o el polígono de la forma libre
+        c.beginPath()
+        if (q.kind === 'freeform') {
+          p.forEach((v, k) => k ? c.lineTo(v.x, v.y) : c.moveTo(v.x, v.y))
+        } else {
+          const N = 16, borde = []
+          for (let t = 0; t <= N; t++) borde.push([t / N, 0])
+          for (let t = 1; t <= N; t++) borde.push([1, t / N])
+          for (let t = N - 1; t >= 0; t--) borde.push([t / N, 1])
+          for (let t = N - 1; t > 0; t--) borde.push([0, t / N])
+          borde.forEach(([u, v], k) => {
+            const b = e.aMapa(enParche(q.puntos, u, v))
+            k ? c.lineTo(b.x, b.y) : c.moveTo(b.x, b.y)
+          })
+        }
+        c.closePath()
+        c.fillStyle = `hsla(${hue},55%,55%,0.18)`
+        c.strokeStyle = `hsla(${hue},55%,72%,0.85)`
+        c.fill()
+        c.stroke()
+
+        // nombre en el centro
+        const cx = p.reduce((a, v) => a + v.x, 0) / p.length, cy = p.reduce((a, v) => a + v.y, 0) / p.length
+        c.fillStyle = 'rgba(255,255,255,0.55)'
+        c.font = '11px ui-monospace, monospace'
+        c.textAlign = 'center'
+        c.fillText(q.nombre, cx, cy + 20)
+
+        // puntos: esquinas en rojo, atractores en amarillo, como en minimapper
+        p.forEach((v, k) => {
+          const activo = tomado && tomado.i === q.i && (tomado.mover || tomado.k === k)
+          c.beginPath()
+          c.arc(v.x, v.y, activo ? 7 : 4.5, 0, Math.PI * 2)
+          c.fillStyle = activo ? '#fff' : (q.kind === 'freeform' || ESQUINAS.has(k)) ? 'rgb(255,60,60)' : 'rgb(255,200,64)'
+          c.fill()
+        })
+      })
+    }
+
+    function puntoBajo (x, y) {
+      if (!ultimo_estado) return null
+      const e = escala()
+      for (const q of ultimo_estado.quads) {
+        for (let k = 0; k < q.puntos.length; k++) {
+          const v = e.aMapa(q.puntos[k])
+          if (Math.hypot(v.x - x, v.y - y) < RADIO) return { i: q.i, k }
+        }
+      }
+      return null
+    }
+
+    function mandarVertices (i, inicio) {
+      edicion.postMessage({ tipo: 'vertices', escena: ultimo_estado.escena, i, inicio,
+        puntos: ultimo_estado.quads[i].puntos.map(p => ({ x: p.x, y: p.y })) })
+    }
+
+    const posicion = ev => { const r = mapa.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top] }
+
+    mapa.addEventListener('pointerdown', ev => {
+      const [x, y] = posicion(ev)
+      const hit = puntoBajo(x, y)
+      if (!hit) return
+      mapa.setPointerCapture(ev.pointerId)
+      tomado = { ...hit, mover: teclaM, antes: escala().aLienzo(x, y), inicio: true }
+      pintarMapa()
+    })
+    mapa.addEventListener('pointermove', ev => {
+      const [x, y] = posicion(ev)
+      if (!tomado) {
+        mapa.style.cursor = puntoBajo(x, y) ? (teclaM ? 'move' : 'grab') : 'default'
+        return
+      }
+      const q = ultimo_estado?.quads[tomado.i]
+      if (!q) { tomado = null; return }
+      const ahora = escala().aLienzo(x, y)
+      if (tomado.mover) {
+        const dx = ahora.x - tomado.antes.x, dy = ahora.y - tomado.antes.y
+        q.puntos.forEach(p => { p.x += dx; p.y += dy })
+      } else {
+        q.puntos[tomado.k] = ahora
+      }
+      tomado.antes = ahora
+      mandarVertices(tomado.i, tomado.inicio)
+      tomado.inicio = false
+      pintarMapa()
+    })
+    const soltar = () => { if (tomado) { tomado = null; pintarMapa() } }
+    mapa.addEventListener('pointerup', soltar)
+    mapa.addEventListener('pointercancel', soltar)
+
+    // M se lee al tomar el punto, como en minimapper: soltarla a media maniobra no la corta.
+    window.addEventListener('keydown', e => {
+      if (e.key === 'm' || e.key === 'M') teclaM = true
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); deshacer() }
+    })
+    window.addEventListener('keyup', e => { if (e.key === 'm' || e.key === 'M') teclaM = false })
+    window.addEventListener('blur', () => { teclaM = false })
+    window.addEventListener('resize', pintarMapa)
+
+    function deshacer () {
+      if (ultimo_estado) edicion.postMessage({ tipo: 'deshacer', escena: ultimo_estado.escena })
+    }
+    document.getElementById('btnDeshacer').addEventListener('click', deshacer)
+    pintarMapa()
 
     // Quién escucha: una ventana que no contesta en 5 s se da por cerrada. Dos a la vez
     // reciben el mismo color y las dos guardan, y la que guarda al último pisa los

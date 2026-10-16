@@ -787,24 +787,33 @@ setInterval(() => {
 // quads hay y su color; control/ los muestra y manda cambios. La dueña del estado es
 // esta ventana: control no guarda nada, y cerrarlo no pierde nada. Ver control/NOTAS.md.
 //   control → { tipo: 'pedir' }                      (al abrir y cada 2 s)
-//   aquí    → { tipo: 'estado', ventana, salida, escena, numero, quads: [{ i, nombre, fuente, color }] }
+//   aquí    → { tipo: 'estado', ventana, salida, escena, numero, lienzo: { w, h },
+//               quads: [{ i, nombre, kind, fuente, puntos: [{ x, y }], color }] }
 //   control → { tipo: 'color', escena, i, cambios: { nivel: 0.8 }, inicio }
-// `ventana` es un id por pestaña: si control oye a dos, avisa.
+//   control → { tipo: 'vertices', escena, i, puntos: [{ x, y }], inicio }   (todos los del quad)
+//   control → { tipo: 'deshacer', escena }
+// `ventana` es un id por pestaña: si control oye a dos, avisa. Los puntos van en las
+// coordenadas de siempre (centradas, en pixeles de esta ventana); `lienzo` le dice a
+// control a qué escala dibujarlos.
 
 const EDICION_CANAL = 'minimapper-edicion';
 const VENTANA_ID = Math.random().toString(36).slice(2, 10);
 let canalEdicion = null;
 let estadoPendiente = false;
 let guardarRemoto = null;
+let guardarVertices = null;
 
 function estadoParaControl() {
   return {
     tipo: 'estado', ventana: VENTANA_ID, salida: SALIDA,
     escena: scenes[currentSceneIndex]?.id, numero: currentSceneIndex + 1,
+    lienzo: { w: window.width || innerWidth, h: window.height || innerHeight },
     quads: quads.map((q, i) => {
       const c = quadColor(q);
+      const libre = q.kind === 'freeform';
       return {
-        i, nombre: `${q.kind === 'freeform' ? 'Libre' : 'Quad'} ${i}`, fuente: q.sourceType,
+        i, nombre: `${libre ? 'Libre' : 'Quad'} ${i}`, kind: libre ? 'freeform' : 'quad', fuente: q.sourceType,
+        puntos: (libre ? q.vertices : q.points).map(p => ({ x: p.x, y: p.y })),
         color: { nivel: c.nivel, saturacion: c.saturacion, tinte: c.tinte,
                  senal: c.senal || '', destino: c.destino || 'nivel', invertir: !!c.invertir },
       };
@@ -850,6 +859,25 @@ function aplicarColorRemoto(m) {
   guardarRemoto = setTimeout(() => { saveToLocalStorage(); renderQuadList(); }, estructura ? 0 : 300);
 }
 
+// control manda todos los puntos del quad, no un delta: arrastrar un vértice y mover la
+// superficie entera (M) son el mismo mensaje. Se descarta si no coincide el número de
+// puntos —el quad cambió de forma mientras tanto— o si algún punto se fue muy lejos.
+function aplicarVerticesRemoto(m) {
+  const quad = quads[m.i];
+  if (m.escena !== scenes[currentSceneIndex]?.id || !quad || !Array.isArray(m.puntos)) { publicarEstado(); return; }
+  const libre = quad.kind === 'freeform';
+  const pts = libre ? quad.vertices : quad.points;
+  const lejos = 4 * Math.max(width, height);
+  const valido = v => typeof v === 'number' && isFinite(v) && Math.abs(v) < lejos;
+  if (m.puntos.length !== pts.length || !m.puntos.every(p => p && valido(p.x) && valido(p.y))) { publicarEstado(); return; }
+  if (m.inicio) pushUndo();
+  m.puntos.forEach((p, k) => { pts[k].x = p.x; pts[k].y = p.y; });
+  if (!libre) buildTessCache(quad);
+  salidaGuarda = true;
+  clearTimeout(guardarVertices);
+  guardarVertices = setTimeout(() => { saveToLocalStorage(); updateCurrentSceneThumbnail(); }, 300);
+}
+
 try {
   canalEdicion = new BroadcastChannel(EDICION_CANAL);
   canalEdicion.onmessage = (e) => {
@@ -857,6 +885,8 @@ try {
     if (!m) return;
     if (m.tipo === 'pedir') publicarEstado();
     else if (m.tipo === 'color') aplicarColorRemoto(m);
+    else if (m.tipo === 'vertices') aplicarVerticesRemoto(m);
+    else if (m.tipo === 'deshacer' && m.escena === scenes[currentSceneIndex]?.id) { salidaGuarda = true; undo(); }
   };
 } catch (e) {
   canalEdicion = null;
@@ -1753,6 +1783,7 @@ function mouseDragged() {
       pt.y = mouseY - height / 2;
       buildTessCache(shape);
     }
+    publicarEstado();   // control/ sigue el arrastre (se junta en un mensaje cada 50 ms)
   }
 }
 
@@ -1779,6 +1810,7 @@ function doubleClicked() {
 function windowResized() {
   if (glContextLost) return;
   resizeCanvas(windowWidth, windowHeight);
+  publicarEstado();   // control/ dibuja los puntos a la escala de este lienzo
 }
 
 // --- GESTIÓN DE ESCENAS ---
