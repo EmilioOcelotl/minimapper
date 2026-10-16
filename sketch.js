@@ -657,7 +657,7 @@ function tinteRGB(hex) {
 function colorParaGuardar(c) {
   if (colorEsNeutro(c)) return null;
   const out = { nivel: c.nivel, saturacion: c.saturacion, tinte: c.tinte };
-  if (c.senal) Object.assign(out, { senal: c.senal, invertir: !!c.invertir, subida: c.subida ?? 1, bajada: c.bajada ?? 2 });
+  if (c.senal) Object.assign(out, { senal: c.senal, destino: c.destino || 'nivel', invertir: !!c.invertir, subida: c.subida ?? 1, bajada: c.bajada ?? 2 });
   return out;
 }
 
@@ -680,6 +680,13 @@ function setQuadSenal(index, senal) {
     if (c.invertir == null) c.invertir = false;
   }
   renderQuadList();
+  saveToLocalStorage();
+}
+
+// A qué parámetro va la señal: nivel, saturación o tinte.
+function setQuadDestino(index, destino) {
+  pushUndo();
+  quadColor(quads[index]).destino = destino;
   saveToLocalStorage();
 }
 
@@ -727,17 +734,25 @@ function sensorVivo() {
   return performance.now() - sensorUltimo < 1500;
 }
 
-// Lo que sale del quad: el nivel manual, o el nivel por la rampa si hay señal. La rampa
-// se acerca a la lectura a velocidad fija: tarda `subida` segundos de 0 a 1 y `bajada`
-// de 1 a 0. Con una lectura de 0/1 (un evento) es la misma rampa de la S9.
-function nivelEfectivo(c, dt) {
-  if (!c.senal) return c.nivel;
+// Lo que sale del quad: los valores manuales o, si hay señal, el destino por la rampa.
+// La rampa se acerca a la lectura a velocidad fija: tarda `subida` segundos de 0 a 1 y
+// `bajada` de 1 a 0. Con una lectura de 0/1 (un evento) es la misma rampa de la S9.
+// El deslizador del destino marca el máximo: nivel y saturación se multiplican por la
+// rampa (0 = negro, 0 = gris); el tinte va de blanco (sin teñir) al color elegido.
+function colorEfectivo(c, dt) {
+  const tinte = tinteRGB(c.tinte);
+  if (!c.senal) return { nivel: c.nivel, saturacion: c.saturacion, tinte };
   let meta = sensorVivo() ? (sensor[c.senal] ?? 0) : 0;
   if (c.invertir) meta = 1 - meta;
   const r = c.rampa ?? 0;
   const paso = meta > r ? dt / Math.max(c.subida ?? 1, 0.001) : dt / Math.max(c.bajada ?? 2, 0.001);
   c.rampa = meta > r ? Math.min(meta, r + paso) : Math.max(meta, r - paso);
-  return c.nivel * c.rampa;
+  const destino = c.destino || 'nivel';
+  return {
+    nivel: destino === 'nivel' ? c.nivel * c.rampa : c.nivel,
+    saturacion: destino === 'saturacion' ? c.saturacion * c.rampa : c.saturacion,
+    tinte: destino === 'tinte' ? tinte.map(v => 1 + (v - 1) * c.rampa) : tinte,
+  };
 }
 
 setInterval(() => {
@@ -860,9 +875,10 @@ function draw() {
     if (conShader) {
       shader(colorShader);
       colorShader.setUniform('uTex', tex);
-      colorShader.setUniform('uNivel', nivelEfectivo(quad.color, Math.min(deltaTime, 100) / 1000));
-      colorShader.setUniform('uSaturacion', quad.color.saturacion);
-      colorShader.setUniform('uTinte', tinteRGB(quad.color.tinte));
+      const ef = colorEfectivo(quad.color, Math.min(deltaTime, 100) / 1000);
+      colorShader.setUniform('uNivel', ef.nivel);
+      colorShader.setUniform('uSaturacion', ef.saturacion);
+      colorShader.setUniform('uTinte', ef.tinte);
     } else {
       texture(tex);
     }
@@ -1546,6 +1562,10 @@ function renderQuadList() {
             `<option value="${k}" ${c.senal === k ? 'selected' : ''}>${k}</option>`).join('')}
         </select>${c.senal ? `<output id="color-rampa-${i}" title="rampa">${(c.rampa ?? 0).toFixed(2)}</output>` : '<span></span>'}</label>
         ${c.senal ? `
+        <label>destino<select onchange="setQuadDestino(${i}, this.value)">
+          ${[['nivel', 'nivel'], ['saturacion', 'saturación'], ['tinte', 'tinte']].map(([v, t]) =>
+            `<option value="${v}" ${(c.destino || 'nivel') === v ? 'selected' : ''}>${t}</option>`).join('')}
+        </select><span></span></label>
         <label>subida<input type="range" min="0" max="8" step="0.1" value="${c.subida ?? 1}" onpointerdown="undoColor()" onkeydown="undoColor(event)"
           oninput="setQuadColor(${i},'subida',this.value)" onchange="saveToLocalStorage()"><output id="color-subida-${i}">${(c.subida ?? 1).toFixed(1)} s</output></label>
         <label>bajada<input type="range" min="0" max="8" step="0.1" value="${c.bajada ?? 2}" onpointerdown="undoColor()" onkeydown="undoColor(event)"
