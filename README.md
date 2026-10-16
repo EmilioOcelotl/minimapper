@@ -17,6 +17,7 @@ Permite generar visuales y proyectarlos sobre superficies deformables con bordes
 - Escribe código Hydra en el editor y haz clic en **RUN**
 - **STOP** silencia la salida visual (hush())
 - Vuelve a clic en ✦ para modo presentación (UI oculta)
+- Para la ventana del proyector, abre `index.html?salida`: sólo la imagen, sin botones ni cursor. Calibra en `index.html`; la salida toma lo guardado al recargar
 
 ## Tipos de superficie
 

@@ -3,7 +3,13 @@
 let uiVisible = false;
 let showHint = true;
 
+// index.html?salida es la ventana que va al proyector: sólo el resultado. Nunca
+// entra a edición, no muestra ✦, hint, ayuda, HUD ni cursor, ignora el teclado y
+// no escribe en localStorage, para no pisar lo que se edita en otra ventana.
+const SALIDA = new URLSearchParams(location.search).has('salida');
+
 function toggleEditMode() {
+  if (SALIDA) return;
   if (isPlaying) stopPlayback();
   if (drawingMode) cancelDrawing();
   if (freeformMode) cancelFreeform();
@@ -54,6 +60,7 @@ function closeWelcome() {
 }
 
 document.addEventListener('keydown', (e) => {
+  if (SALIDA) return;
   if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'H') toggleEditMode();
   if (e.key === 'Escape') {
     const welcome = document.getElementById('welcome');
@@ -73,6 +80,13 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('toggle-btn').classList.add('presentation');
   document.getElementById('info-btn').classList.remove('visible');
   loadFromLocalStorage();
+  if (SALIDA) { document.body.classList.add('salida'); return; }
+  // El hint se proyectaría si la app se queda en presentación después de recargar.
+  setTimeout(() => {
+    if (!showHint) return;
+    showHint = false;
+    document.getElementById('hint').style.display = 'none';
+  }, 10000);
   let welcomed = false;
   try { welcomed = !!localStorage.getItem('minimapper_welcomed'); } catch (e) {}
   if (!welcomed) {
@@ -295,6 +309,7 @@ function serializableQuads(quadsData) {
 }
 
 function saveToLocalStorage() {
+  if (SALIDA) return;
   try {
     snapshotCurrentScene();
     const config = {

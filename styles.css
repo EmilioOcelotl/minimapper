@@ -1061,3 +1061,18 @@ select option {
 #control-estado.vivo { color: rgba(255, 255, 255, 0.7); }
 #control-estado.vivo::before { color: rgb(90, 230, 150); }
 #control-estado:hover { color: rgba(255, 255, 255, 0.85); }
+
+/* --- Ventana de salida (index.html?salida): sólo el resultado --- */
+body.salida #toggle-btn,
+body.salida #hint,
+body.salida #info-btn,
+body.salida #ui,
+body.salida #welcome,
+body.salida #playback-hud {
+  display: none !important;
+}
+
+body.salida,
+body.salida canvas {
+  cursor: none;
+}
