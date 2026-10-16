@@ -945,3 +945,89 @@ select option {
   margin-top: 3px;
   word-break: break-all;
 }
+
+/* --- Color por quad: nivel, saturación, tinte --- */
+.quad-color {
+  margin-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 5px;
+  display: grid;
+  gap: 3px;
+}
+
+.quad-color label {
+  display: grid;
+  grid-template-columns: 62px 1fr 30px;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.quad-color input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  height: 2px;
+  margin: 0;
+  accent-color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+}
+
+.quad-color input[type="color"] {
+  width: 100%;
+  height: 16px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+}
+
+.quad-color output {
+  font-family: monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.5);
+  text-align: right;
+}
+
+.quad-color button {
+  margin: 0;
+  padding: 0 4px;
+  font-size: 11px;
+}
+
+.quad-color select {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  font-size: 10px;
+}
+
+.quad-color button.activo {
+  border-color: rgba(120, 255, 180, 0.6);
+  color: rgb(150, 255, 200);
+}
+
+/* --- Estado de control/ (lecturas por BroadcastChannel) --- */
+#control-estado {
+  display: block;
+  margin-top: 8px;
+  font-family: monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.3);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#control-estado::before {
+  content: '●';
+  margin-right: 6px;
+  color: rgba(255, 255, 255, 0.2);
+}
+
+#control-estado.vivo { color: rgba(255, 255, 255, 0.7); }
+#control-estado.vivo::before { color: rgb(90, 230, 150); }
+#control-estado:hover { color: rgba(255, 255, 255, 0.85); }

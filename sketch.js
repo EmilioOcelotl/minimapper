@@ -166,6 +166,8 @@ function saveSession() {
             if (srcUrl) data.sourceUrl = srcUrl;
             if (imageData) data.imageData = imageData;
             if (q.sourceType === 'hydra') { data.hydraCode = q.hydraCode || ''; data.hydraOutput = q.hydraOutput ?? 0; }
+            const color = colorParaGuardar(q.color);
+            if (color) data.color = color;
             return data;
           })
         : serializableQuads(s.quads)
@@ -253,10 +255,10 @@ function applySession(session) {
     }
     let quad;
     if (qData.kind === 'freeform') {
-      quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
+      quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, color: { ...COLOR_NEUTRO, ...qData.color } };
     } else {
       const pts = qData.points || qData;
-      quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput };
+      quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, color: { ...COLOR_NEUTRO, ...qData.color } };
       buildTessCache(quad);
     }
     quads.push(quad);
@@ -545,7 +547,8 @@ function finalizeFreeform() {
     sourceEl: null,
     sourceUrl: null,
     hydraCode: '',
-    hydraOutput: null
+    hydraOutput: null,
+    color: { ...COLOR_NEUTRO }
   };
   quads.push(shape);
   undoStack.length = 0;
@@ -584,7 +587,7 @@ function finalizeQuad() {
     }
   }
 
-  const newQuad = { points, sourceType: 'grid', sourceEl: null, sourceUrl: null, hydraCode: '', hydraOutput: null };
+  const newQuad = { points, sourceType: 'grid', sourceEl: null, sourceUrl: null, hydraCode: '', hydraOutput: null, color: { ...COLOR_NEUTRO } };
   buildTessCache(newQuad);
   quads.push(newQuad);
   undoStack.length = 0;
@@ -592,6 +595,158 @@ function finalizeQuad() {
   saveToLocalStorage();
   updateCurrentSceneThumbnail();
   cancelDrawing();
+}
+
+// --- COLOR POR QUAD ---
+// La etapa de color va entre la fuente y la superficie, como un Level TOP: nivel,
+// saturación y tinte. Sirve igual para Hydra, video, imagen, cámara, pantalla y
+// carrusel. Con los valores neutros el quad se dibuja como siempre, sin shader.
+
+const COLOR_NEUTRO = { nivel: 1, saturacion: 1, tinte: '#ffffff' };
+let colorShader = null;
+
+const COLOR_VERT = `
+precision highp float;
+attribute vec3 aPosition;
+attribute vec2 aTexCoord;
+uniform mat4 uModelViewMatrix;
+uniform mat4 uProjectionMatrix;
+varying vec2 vTexCoord;
+void main() {
+  vTexCoord = aTexCoord;
+  gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aPosition, 1.0);
+}`;
+
+const COLOR_FRAG = `
+precision mediump float;
+varying vec2 vTexCoord;
+uniform sampler2D uTex;
+uniform float uNivel;
+uniform float uSaturacion;
+uniform vec3 uTinte;
+void main() {
+  vec4 c = texture2D(uTex, vTexCoord);
+  float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+  vec3 rgb = mix(vec3(l), c.rgb, uSaturacion) * uTinte * uNivel;
+  gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);
+}`;
+
+function quadColor(quad) {
+  if (!quad.color) quad.color = { ...COLOR_NEUTRO };
+  return quad.color;
+}
+
+function colorEsNeutro(c) {
+  return !c || (c.nivel === 1 && c.saturacion === 1 && (c.tinte || '#ffffff').toLowerCase() === '#ffffff' && !c.senal);
+}
+
+function tinteRGB(hex) {
+  const n = parseInt((hex || '#ffffff').slice(1), 16);
+  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+
+// Copia limpia para guardar: sólo si se movió algo, para no ensuciar sesiones viejas.
+// La rampa en curso (c.rampa) no se guarda: es estado, no decisión.
+function colorParaGuardar(c) {
+  if (colorEsNeutro(c)) return null;
+  const out = { nivel: c.nivel, saturacion: c.saturacion, tinte: c.tinte };
+  if (c.senal) Object.assign(out, { senal: c.senal, invertir: !!c.invertir, subida: c.subida ?? 1, bajada: c.bajada ?? 2 });
+  return out;
+}
+
+function setQuadColor(index, campo, valor) {
+  const c = quadColor(quads[index]);
+  c[campo] = campo === 'tinte' ? valor : parseFloat(valor);
+  const out = document.getElementById(`color-${campo}-${index}`);
+  if (out && campo !== 'tinte') out.textContent = campo === 'subida' || campo === 'bajada' ? c[campo].toFixed(1) + ' s' : c[campo].toFixed(2);
+}
+
+// Conectar el nivel a una lectura de control/ ('' = manual). Con señal, el deslizador
+// de nivel es el máximo y la rampa decide cuánto de ese máximo sale.
+function setQuadSenal(index, senal) {
+  const c = quadColor(quads[index]);
+  c.senal = senal || '';
+  if (c.senal) {
+    if (c.subida == null) c.subida = 1;
+    if (c.bajada == null) c.bajada = 2;
+    if (c.invertir == null) c.invertir = false;
+  }
+  renderQuadList();
+  saveToLocalStorage();
+}
+
+function toggleQuadInvertir(index) {
+  const c = quadColor(quads[index]);
+  c.invertir = !c.invertir;
+  renderQuadList();
+  saveToLocalStorage();
+}
+
+// --- CONTROL: LECTURAS DESDE OTRA VENTANA ---
+// control/ lee la cámara y publica números de 0 a 1 por un BroadcastChannel. Sólo
+// conecta entre páginas del mismo origen: la versión en línea, o un servidor local
+// en la carpeta del repo (no file://). Aquí se guardan en el global `sensor`, que
+// Hydra puede leer: osc(10, 0.1, () => sensor.cercania * 2).out(o0)
+
+var sensor = {};
+let sensorUltimo = 0;
+const SENSOR_CANAL = 'minimapper-control';
+
+try {
+  const canal = new BroadcastChannel(SENSOR_CANAL);
+  canal.onmessage = (e) => {
+    const lecturas = e.data && e.data.lecturas;
+    if (!lecturas) return;
+    let nuevas = false;
+    for (const [k, v] of Object.entries(lecturas)) {
+      if (typeof v !== 'number' || !isFinite(v)) continue;
+      if (!(k in sensor)) nuevas = true;
+      sensor[k] = Math.min(1, Math.max(0, v));
+    }
+    sensorUltimo = performance.now();
+    // Una lectura nueva aparece en los selectores de señal de cada quad.
+    if (nuevas && typeof renderQuadList === 'function') renderQuadList();
+  };
+} catch (e) {
+  console.warn('BroadcastChannel no disponible: control/ no puede conectarse.', e);
+}
+
+function sensorVivo() {
+  return performance.now() - sensorUltimo < 1500;
+}
+
+// Lo que sale del quad: el nivel manual, o el nivel por la rampa si hay señal. La rampa
+// se acerca a la lectura a velocidad fija: tarda `subida` segundos de 0 a 1 y `bajada`
+// de 1 a 0. Con una lectura de 0/1 (un evento) es la misma rampa de la S9.
+function nivelEfectivo(c, dt) {
+  if (!c.senal) return c.nivel;
+  let meta = sensorVivo() ? (sensor[c.senal] ?? 0) : 0;
+  if (c.invertir) meta = 1 - meta;
+  const r = c.rampa ?? meta;
+  const paso = meta > r ? dt / Math.max(c.subida ?? 1, 0.001) : dt / Math.max(c.bajada ?? 2, 0.001);
+  c.rampa = meta > r ? Math.min(meta, r + paso) : Math.max(meta, r - paso);
+  return c.nivel * c.rampa;
+}
+
+setInterval(() => {
+  const el = document.getElementById('control-estado');
+  if (!el) return;
+  const claves = Object.keys(sensor);
+  const vivo = sensorVivo();
+  el.classList.toggle('vivo', vivo);
+  el.textContent = vivo
+    ? 'control · ' + claves.map(k => `${k} ${sensor[k].toFixed(2)}`).join(' · ')
+    : (claves.length ? 'control · sin señal' : 'control · abre control/ en otra ventana');
+  quads.forEach((q, i) => {
+    const out = document.getElementById(`color-rampa-${i}`);
+    if (out && q.color && q.color.senal) out.textContent = (q.color.rampa ?? 0).toFixed(2);
+  });
+}, 200);
+
+function resetQuadColor(index) {
+  quads[index].color = { ...COLOR_NEUTRO };
+  renderQuadList();
+  saveToLocalStorage();
 }
 
 // --- CONTEXTO WEBGL PERDIDO ---
@@ -629,6 +784,7 @@ function setup() {
   window.noise = _hydraNoise; // restore after p5 overwrote it
   for (let i = 0; i < 4; i++) hydraCanvases.push(createGraphics(512, 512));
   gridGfx = buildGridTexture();
+  colorShader = createShader(COLOR_VERT, COLOR_FRAG);
 
   _applySceneData(scenes[currentSceneIndex]);
   renderSceneStrip();
@@ -660,10 +816,11 @@ function draw() {
       quad.sourceEl.drawingContext.drawImage(quad.sourceVideo, 0, 0, 512, 512);
     }
 
+    let tex;
     if (quad.sourceType === 'grid') {
-      texture(gridGfx);
+      tex = gridGfx;
     } else if (quad.sourceType === 'carousel' && quad.carousel && quad.carousel.length > 0) {
-      texture(quad.carousel[quad.carouselIndex].img);
+      tex = quad.carousel[quad.carouselIndex].img;
     } else if (quad.sourceType === 'hydra') {
       const _slot = quad.hydraOutput ?? 0;
       hydra.renderFbo({
@@ -671,13 +828,24 @@ function draw() {
         resolution: [hc.elt.width, hc.elt.height]
       });
       hydraCanvases[_slot].drawingContext.drawImage(hc.elt, 0, 0, 512, 512);
-      texture(hydraCanvases[_slot]);
+      tex = hydraCanvases[_slot];
     } else if (quad.sourceEl) {
-      texture(quad.sourceEl);
+      tex = quad.sourceEl;
     } else {
       // Sin fuente cargada (video/imagen sin archivo, cámara resolviendo, carrusel vacío):
       // la rejilla, no el canvas crudo de Hydra. Ver CLAUDE.md, "Rejilla de calibración".
-      texture(gridGfx);
+      tex = gridGfx;
+    }
+
+    const conShader = !colorEsNeutro(quad.color) && colorShader;
+    if (conShader) {
+      shader(colorShader);
+      colorShader.setUniform('uTex', tex);
+      colorShader.setUniform('uNivel', nivelEfectivo(quad.color, Math.min(deltaTime, 100) / 1000));
+      colorShader.setUniform('uSaturacion', quad.color.saturacion);
+      colorShader.setUniform('uTinte', tinteRGB(quad.color.tinte));
+    } else {
+      texture(tex);
     }
 
     if (uiVisible) stroke(255, 255, 255, 18);
@@ -686,7 +854,7 @@ function draw() {
     if (quad.kind === 'freeform') {
       const verts = quad.vertices;
       const n = verts.length;
-      if (n < 3) continue;
+      if (n < 3) { if (conShader) resetShader(); continue; }
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       for (const v of verts) {
         if (v.x < minX) minX = v.x; if (v.x > maxX) maxX = v.x;
@@ -723,6 +891,7 @@ function draw() {
       }
       endShape();
     }
+    if (conShader) resetShader();
   }
 
   // Control points + crosshair — edit mode only
@@ -1344,6 +1513,27 @@ function renderQuadList() {
         </div>`
       : '';
 
+    const c = quadColor(q);
+    const colorSection = `<div class="quad-color">
+        <label>nivel<input type="range" min="0" max="1.5" step="0.01" value="${c.nivel}"
+          oninput="setQuadColor(${i},'nivel',this.value)" onchange="saveToLocalStorage()"><output id="color-nivel-${i}">${c.nivel.toFixed(2)}</output></label>
+        <label>saturación<input type="range" min="0" max="2" step="0.01" value="${c.saturacion}"
+          oninput="setQuadColor(${i},'saturacion',this.value)" onchange="saveToLocalStorage()"><output id="color-saturacion-${i}">${c.saturacion.toFixed(2)}</output></label>
+        <label>tinte<input type="color" value="${c.tinte}"
+          oninput="setQuadColor(${i},'tinte',this.value)" onchange="saveToLocalStorage()"><button onclick="resetQuadColor(${i})" title="Volver a los valores neutros">↺</button></label>
+        <label>señal<select onchange="setQuadSenal(${i}, this.value)">
+          <option value="" ${!c.senal ? 'selected' : ''}>manual</option>
+          ${[...new Set([...Object.keys(sensor), ...(c.senal ? [c.senal] : [])])].map(k =>
+            `<option value="${k}" ${c.senal === k ? 'selected' : ''}>${k}</option>`).join('')}
+        </select>${c.senal ? `<output id="color-rampa-${i}" title="rampa">${(c.rampa ?? 0).toFixed(2)}</output>` : '<span></span>'}</label>
+        ${c.senal ? `
+        <label>subida<input type="range" min="0" max="8" step="0.1" value="${c.subida}"
+          oninput="setQuadColor(${i},'subida',this.value)" onchange="saveToLocalStorage()"><output id="color-subida-${i}">${c.subida.toFixed(1)} s</output></label>
+        <label>bajada<input type="range" min="0" max="8" step="0.1" value="${c.bajada}"
+          oninput="setQuadColor(${i},'bajada',this.value)" onchange="saveToLocalStorage()"><output id="color-bajada-${i}">${c.bajada.toFixed(1)} s</output></label>
+        <label>invertir<button class="${c.invertir ? 'activo' : ''}" onclick="toggleQuadInvertir(${i})">${c.invertir ? 'sí' : 'no'}</button><span></span></label>` : ''}
+      </div>`;
+
     div.innerHTML = `
       <span class="quad-label">${q.kind === 'freeform' ? 'Libre' : 'Quad'} ${i}${q.sourceType === 'hydra' && q.hydraOutput != null ? ` — o${q.hydraOutput}` : ''}</span>
       <div class="quad-controls">
@@ -1364,6 +1554,7 @@ function renderQuadList() {
       ${note}
       ${hydraSection}
       ${carouselSection}
+      ${colorSection}
     `;
 
     container.appendChild(div);
@@ -1477,6 +1668,8 @@ function snapshotCurrentScene() {
     if (srcUrl) data.sourceUrl = srcUrl;
     if (q.sourceType === 'hydra') { data.hydraCode = q.hydraCode || ''; data.hydraOutput = q.hydraOutput ?? 0; }
     if (q.carousel && q.carousel.length) { data.carousel = q.carousel; data.carouselIndex = q.carouselIndex || 0; }
+    const color = colorParaGuardar(q.color);
+    if (color) data.color = color;
     // Se guarda el elemento entero, no el stream: una compartición no se reanuda, sólo se
     // mantiene. Y con él su proxy, para no dejar un p5.Graphics tirado por cada ida y vuelta.
     if (q.sourceType === 'pantalla' && q.sourceVideo) data.screenSource = { videoEl: q.sourceVideo, proxy: q.sourceEl };
@@ -1504,9 +1697,9 @@ function _applySceneData(sceneData) {
       hydraSlots[hydraOutput]++;
     }
     if (q.kind === 'freeform') {
-      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0 };
+      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0, color: { ...COLOR_NEUTRO, ...q.color } };
     }
-    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0 };
+    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0, color: { ...COLOR_NEUTRO, ...q.color } };
     buildTessCache(quad);
     return quad;
   });

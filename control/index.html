@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>control · minimapper</title>
+  <meta name="description" content="Lecturas de la cámara para minimapper: números de 0 a 1 que se conectan al nivel de un quad o a un sketch de Hydra." />
+  <style>
+    :root {
+      --fondo: #0b0b0b;
+      --texto: #e0e0e0;
+      --tenue: rgba(255, 255, 255, 0.4);
+      --linea: rgba(255, 255, 255, 0.1);
+      --dato: rgb(232, 163, 61);
+      --evento: rgb(90, 230, 150);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--fondo);
+      color: var(--texto);
+      font: 13px/1.5 ui-monospace, "IBM Plex Mono", Menlo, monospace;
+    }
+    main { max-width: 900px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { font-size: 15px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; margin: 0 0 6px; }
+    p { color: var(--tenue); margin: 0 0 14px; max-width: 70ch; }
+    code { color: var(--texto); }
+    .rejilla { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 20px; margin-top: 18px; }
+    @media (max-width: 700px) { .rejilla { grid-template-columns: 1fr; } }
+    .camara { position: relative; background: #000; border: 1px solid var(--linea); aspect-ratio: 4 / 3; }
+    .camara canvas { width: 100%; height: 100%; display: block; }
+    .fila { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+    button, .btn {
+      background: rgba(255, 255, 255, 0.06); color: var(--texto); border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 3px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer;
+    }
+    button:hover, .btn:hover { background: rgba(255, 255, 255, 0.12); }
+    .btn input { display: none; }
+    #estado { color: var(--tenue); font-size: 11px; }
+    #estado[data-error] { color: #ff7a5c; }
+    h2 { font-size: 11px; font-weight: 500; letter-spacing: 1px; text-transform: uppercase; color: var(--tenue); margin: 0 0 8px; }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 6px 0; border-top: 1px solid var(--linea); vertical-align: top; }
+    td.nombre { width: 90px; color: var(--texto); }
+    td.valor { width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
+    td.que { color: var(--tenue); font-size: 11px; padding-left: 12px; }
+    .barra { position: relative; height: 6px; background: rgba(255, 255, 255, 0.06); margin-top: 4px; }
+    .barra i { position: absolute; inset: 0 auto 0 0; background: var(--dato); }
+    .barra b { position: absolute; top: -3px; bottom: -3px; width: 1px; background: #fff; }
+    tr.evento .barra i { background: var(--evento); }
+    label { display: grid; grid-template-columns: 90px 1fr 48px; gap: 8px; align-items: center; margin-top: 14px; color: var(--tenue); }
+    input[type=range] { width: 100%; accent-color: #fff; }
+    output { text-align: right; color: var(--texto); }
+    .canal { margin-top: 18px; font-size: 11px; color: var(--tenue); }
+    .canal span::before { content: '●'; margin-right: 6px; }
+    .canal span.vivo::before { color: var(--evento); }
+    a { color: var(--texto); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>control</h1>
+    <p>
+      Esta ventana lee la cámara y publica <em>lecturas</em>: números de 0 a 1.
+      <a href="../" target="minimapper">minimapper</a>, abierto en otra ventana, los recibe.
+      En cada quad, el nivel puede conectarse a una lectura, con su subida y bajada.
+      En Hydra se leen como <code>() =&gt; sensor.cercania</code>.
+      Como el video de YouTube que se comparte con Pantalla, pero en vez de una imagen viaja un número.
+    </p>
+
+    <div class="rejilla">
+      <div>
+        <div class="camara"><canvas id="vista" width="640" height="480" aria-label="Lo que ve la cámara"></canvas></div>
+        <div class="fila">
+          <button id="btnCamara" type="button">Encender cámara</button>
+          <label class="btn" style="display:inline-block;margin:0">Usar un video<input id="archivo" type="file" accept="video/*"></label>
+          <span id="estado" role="status">Nada se graba ni se envía fuera de esta computadora.</span>
+        </div>
+      </div>
+
+      <div>
+        <h2>Lecturas</h2>
+        <table id="lecturas"></table>
+        <label for="umbral">umbral <input id="umbral" type="range" min="0.05" max="0.95" step="0.01" value="0.45"><output id="umbralOut"></output></label>
+        <div class="canal"><span id="canal">sin minimapper que escuche todavía</span></div>
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    // Una lectura = un nombre, un número de 0 a 1 y lo que mide. Agregar una lectura es
+    // sumar una fila aquí y calcularla en cuadro(): minimapper la descubre solo y la
+    // muestra en los selectores de señal.
+    const LECTURAS = [
+      { nombre: 'cercania', que: 'qué tan cerca está la cara más grande: su ancho contra el ancho del cuadro' },
+      { nombre: 'cerca', que: '1 si la cercanía pasa el umbral, 0 si no. Un evento: la rampa la pone cada quad', evento: true },
+    ]
+
+    const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1'
+    const MODELO = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite'
+    const canal = new BroadcastChannel('minimapper-control')
+
+    const valores = Object.fromEntries(LECTURAS.map(l => [l.nombre, 0]))
+    const tabla = document.getElementById('lecturas')
+    tabla.innerHTML = LECTURAS.map(l => `
+      <tr class="${l.evento ? 'evento' : ''}">
+        <td class="nombre">${l.nombre}<div class="barra"><i id="b-${l.nombre}"></i>${l.nombre === 'cercania' ? '<b id="marcaUmbral"></b>' : ''}</div></td>
+        <td class="valor" id="v-${l.nombre}">0.00</td>
+        <td class="que">${l.que}</td>
+      </tr>`).join('')
+
+    let umbral = 0.45
+    const umbralEl = document.getElementById('umbral')
+    const leerUmbral = () => {
+      umbral = parseFloat(umbralEl.value)
+      document.getElementById('umbralOut').textContent = umbral.toFixed(2)
+      document.getElementById('marcaUmbral').style.left = (umbral * 100) + '%'
+    }
+    umbralEl.addEventListener('input', leerUmbral)
+    leerUmbral()
+
+    const estado = document.getElementById('estado')
+    const avisar = (texto, error = false) => {
+      estado.textContent = texto
+      error ? estado.setAttribute('data-error', '') : estado.removeAttribute('data-error')
+    }
+
+    // Crea el detector en la GPU; si no hay, en la CPU.
+    let detector = null
+    async function cargar () {
+      if (detector) return
+      avisar('cargando el modelo… la primera vez tarda unos segundos')
+      const vision = await import(MP + '/vision_bundle.mjs')
+      const fileset = await vision.FilesetResolver.forVisionTasks(MP + '/wasm')
+      const opciones = delegate => ({ baseOptions: { modelAssetPath: MODELO, delegate }, runningMode: 'VIDEO' })
+      try {
+        detector = await vision.FaceDetector.createFromOptions(fileset, opciones('GPU'))
+      } catch (e) {
+        detector = await vision.FaceDetector.createFromOptions(fileset, opciones('CPU'))
+      }
+    }
+
+    const video = document.createElement('video')
+    video.muted = true
+    video.playsInline = true
+    video.loop = true
+
+    async function arrancar (fuente) {
+      try {
+        if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop())
+        video.srcObject = null
+        video.removeAttribute('src')
+        if (fuente === 'camara') {
+          avisar('esperando el permiso de la cámara…')
+          video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false })
+        } else {
+          video.src = fuente
+        }
+        await video.play()
+        await cargar()
+        avisar('leyendo. Deja esta ventana visible: si se minimiza, el navegador la frena.')
+      } catch (e) {
+        console.error(e)
+        avisar('no se pudo: ' + (e.message || e), true)
+      }
+    }
+    document.getElementById('btnCamara').addEventListener('click', () => arrancar('camara'))
+    document.getElementById('archivo').addEventListener('change', e => {
+      const f = e.target.files[0]
+      if (f) arrancar(URL.createObjectURL(f))
+    })
+
+    const vista = document.getElementById('vista')
+    const ctx = vista.getContext('2d')
+    let ultimo = -1, caja = null, crudo = 0, antes = performance.now()
+
+    function cuadro (ahora) {
+      const dt = Math.min(0.1, (ahora - antes) / 1000)
+      antes = ahora
+      const listo = detector && video.readyState >= 2
+
+      if (listo && video.currentTime !== ultimo) {
+        ultimo = video.currentTime
+        const r = detector.detectForVideo(video, performance.now())
+        caja = r.detections.map(d => d.boundingBox).sort((a, b) => b.width - a.width)[0] || null
+      }
+      const medida = listo && caja ? Math.min(1, caja.width / video.videoWidth / 0.5) : 0
+      // apenas suavizado: el sensor crudo tiembla. La rampa de verdad la pone cada quad.
+      crudo += (medida - crudo) * (1 - Math.pow(0.5, dt * 60))
+      valores.cercania = crudo
+      valores.cerca = crudo > umbral ? 1 : 0
+
+      // lo que ve la cámara, en espejo, con la caja de la cara
+      ctx.fillStyle = '#000'
+      ctx.fillRect(0, 0, vista.width, vista.height)
+      if (video.readyState >= 2) {
+        ctx.save()
+        ctx.translate(vista.width, 0)
+        ctx.scale(-1, 1)
+        ctx.drawImage(video, 0, 0, vista.width, vista.height)
+        if (caja) {
+          const sx = vista.width / video.videoWidth, sy = vista.height / video.videoHeight
+          ctx.strokeStyle = valores.cerca ? 'rgb(90,230,150)' : '#fff'
+          ctx.lineWidth = 3
+          ctx.strokeRect(caja.originX * sx, caja.originY * sy, caja.width * sx, caja.height * sy)
+        }
+        ctx.restore()
+      }
+
+      for (const l of LECTURAS) {
+        const v = valores[l.nombre]
+        document.getElementById('v-' + l.nombre).textContent = v.toFixed(2)
+        document.getElementById('b-' + l.nombre).style.width = (v * 100) + '%'
+      }
+
+      canal.postMessage({ lecturas: valores })
+      requestAnimationFrame(cuadro)
+    }
+    requestAnimationFrame(cuadro)
+
+    // minimapper no contesta por el canal; esto sólo dice si hay lectura en curso.
+    setInterval(() => {
+      const el = document.getElementById('canal')
+      const vivo = detector && video.readyState >= 2
+      el.classList.toggle('vivo', !!vivo)
+      el.textContent = vivo ? 'publicando en el canal minimapper-control' : 'sin lectura: enciende la cámara o carga un video'
+    }, 500)
+  </script>
+</body>
+</html>
