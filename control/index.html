@@ -35,6 +35,7 @@
       border-radius: 3px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer;
     }
     button:hover, .btn:hover { background: rgba(255, 255, 255, 0.12); }
+    button:disabled { opacity: 0.35; cursor: default; }
     .btn input { display: none; }
     #estado { color: var(--tenue); font-size: 11px; }
     #estado[data-error] { color: #ff7a5c; }
@@ -69,6 +70,16 @@
     #mapa { width: 100%; display: block; background: #050505; border: 1px solid var(--linea); touch-action: none; }
     .ayuda-mapa { font-size: 11px; color: var(--tenue); margin: 6px 0 18px; }
     .ayuda-mapa button { margin-right: 8px; }
+    .escenas { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin: 0 0 12px; }
+    .escenas .lista { display: flex; flex-wrap: wrap; gap: 6px; }
+    .escena { display: flex; align-items: center; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 3px; }
+    .escena button { border: 0; border-radius: 0; }
+    .escena.actual { border-color: var(--evento); }
+    .escena.actual button { color: var(--evento); }
+    .escena input { width: 4.5em; background: none; color: var(--tenue); border: 0; border-left: 1px solid var(--linea); font: inherit; font-size: 11px; padding: 4px 2px 4px 6px; }
+    .escenas .repro button.activo { border-color: var(--evento); color: var(--evento); }
+    .escenas .que { font-size: 11px; color: var(--tenue); }
+    .aplicado { text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--dato); }
   </style>
 </head>
 <body>
@@ -107,6 +118,7 @@
       <p id="sinMinimapper">Abre <a href="../?salida" target="minimapper">minimapper en modo salida</a>
         y llévalo al proyector: aquí aparecen sus quads. Con una sola pantalla, usa
         <a href="../" target="minimapper">minimapper</a> solo.</p>
+      <div class="escenas" id="escenas" hidden></div>
       <canvas id="mapa" aria-label="Las superficies de minimapper, para mover sus vértices"></canvas>
       <div class="ayuda-mapa"><button id="btnDeshacer" type="button" title="Ctrl+Z">↶ deshacer</button>
         Arrastra un punto: rojo, una esquina; amarillo, curva el borde. Con <code>M</code> apretada mueves la superficie entera.
@@ -273,6 +285,7 @@
 
     edicion.onmessage = e => {
       const m = e.data
+      if (m?.tipo === 'aplicado') return mostrarAplicado(m)
       if (!m || m.tipo !== 'estado') return
       ventanas.set(m.ventana, { visto: performance.now(), salida: m.salida })
       // Mientras se arrastra, los puntos de ese quad son los de aquí: el estado que llega
@@ -281,6 +294,15 @@
       if (q && q.puntos.length === ultimo_estado.quads[tomado.i]?.puntos.length) q.puntos = ultimo_estado.quads[tomado.i].puntos
       ultimo_estado = m
       pintar()
+    }
+
+    // El valor que de verdad sale de cada quad con señal: el máximo por la lectura.
+    function mostrarAplicado (m) {
+      if (m.escena !== ultimo_estado?.escena) return
+      for (const [i, v] of Object.entries(m.valores)) {
+        const el = sups.querySelector(`[data-aplicado="${i}"]`)
+        if (el) el.textContent = v.toFixed(2)
+      }
     }
     const pedir = () => edicion.postMessage({ tipo: 'pedir' })
     pedir()
@@ -299,6 +321,7 @@
     function pintar () {
       const m = ultimo_estado
       pintarMapa()
+      pintarEscenas()
       document.getElementById('escenaInfo').textContent = m ? `· escena ${m.numero}` : ''
       const k = m ? claveDe(m) : ''
       if (k !== clave) {
@@ -331,7 +354,7 @@
         <label>señal<select data-i="${q.i}" data-campo="senal">
           <option value="" ${!c.senal ? 'selected' : ''}>manual</option>
           ${lecturas.map(n => `<option value="${n}" ${c.senal === n ? 'selected' : ''}>${n}</option>`).join('')}
-        </select><span></span></label>
+        </select><span class="aplicado" data-aplicado="${q.i}" title="lo que sale ahora"></span></label>
         ${c.senal ? `
         <label>destino<select data-i="${q.i}" data-campo="destino">
           ${DESTINOS.map(([v, t]) => `<option value="${v}" ${c.destino === v ? 'selected' : ''}>${t}</option>`).join('')}
@@ -368,6 +391,48 @@
       else mandar(i, { nivel: 1, saturacion: 1, tinte: '#ffffff', senal: '' }, true)
       clave = ''   // fuerza a redibujar: los valores cambiaron de golpe
       pintar()
+    })
+
+    // --- Escenas: cambiar de escena y reproducir desde aquí ---
+    // ?salida no tiene panel ni teclado: sin esto se queda en la escena que estaba guardada.
+    // Mismos tres modos que el panel. Las escenas se crean y se borran en minimapper.
+    const escenasEl = document.getElementById('escenas')
+    const MODOS = [['once', '▶ una vez'], ['loop', '⟳ en bucle'], ['random', '⇄ al azar']]
+    let claveEscenas = ''
+
+    function pintarEscenas () {
+      const m = ultimo_estado
+      escenasEl.hidden = !m || !m.escenas
+      if (escenasEl.hidden) { claveEscenas = ''; return }
+      const r = m.reproduccion || {}
+      const k = JSON.stringify([m.escena, m.escenas, r])
+      if (k === claveEscenas) return
+      claveEscenas = k
+      const enfocado = document.activeElement?.dataset?.duracion
+      escenasEl.innerHTML = `
+        <div class="lista">${m.escenas.map((s, n) => `
+          <div class="escena ${s.id === m.escena ? 'actual' : ''}">
+            <button data-escena="${s.id}" title="ir a la escena ${n + 1}">${n + 1}</button>
+            <input type="number" min="1" max="9999" value="${s.duracion}" data-duracion="${s.id}" title="duración en segundos, para reproducir">
+          </div>`).join('')}</div>
+        <div class="repro fila" style="margin:0">${MODOS.map(([modo, texto]) =>
+          `<button data-modo="${modo}" class="${r.activa && r.modo === modo ? 'activo' : ''}">${texto}</button>`).join('')}
+          <button data-modo="" ${r.activa ? '' : 'disabled'}>■ detener</button></div>
+        <span class="que">${r.activa ? 'reproduciendo' : 'en pausa'} · segundos por escena</span>`
+      // Que redibujar no le quite el foco a la duración que se está escribiendo.
+      if (enfocado) escenasEl.querySelector(`[data-duracion="${enfocado}"]`)?.focus()
+    }
+
+    escenasEl.addEventListener('click', e => {
+      const b = e.target.closest('button')
+      if (!b) return
+      if (b.dataset.escena) edicion.postMessage({ tipo: 'escena', id: +b.dataset.escena })
+      else if (b.dataset.modo) edicion.postMessage({ tipo: 'reproducir', modo: b.dataset.modo })
+      else if (b.dataset.modo === '') edicion.postMessage({ tipo: 'detener' })
+    })
+    escenasEl.addEventListener('change', e => {
+      const id = e.target.dataset.duracion
+      if (id) edicion.postMessage({ tipo: 'duracion', id: +id, segundos: parseInt(e.target.value) || 30 })
     })
 
     // --- Mapeo: los vértices de cada quad, editados desde aquí ---
@@ -483,7 +548,7 @@
     }
 
     function mandarVertices (i, inicio) {
-      edicion.postMessage({ tipo: 'vertices', escena: ultimo_estado.escena, i, inicio,
+      edicion.postMessage({ tipo: 'vertices', escena: ultimo_estado.escena, i, k: tomado.mover ? -1 : tomado.k, inicio,
         puntos: ultimo_estado.quads[i].puntos.map(p => ({ x: p.x, y: p.y })) })
     }
 

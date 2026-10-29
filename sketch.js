@@ -790,11 +790,15 @@ setInterval(() => {
 //   aquí    → { tipo: 'estado', ventana, salida, escena, numero, lienzo: { w, h },
 //               quads: [{ i, nombre, kind, fuente, puntos: [{ x, y }], color }] }
 //   control → { tipo: 'color', escena, i, cambios: { nivel: 0.8 }, inicio }
-//   control → { tipo: 'vertices', escena, i, puntos: [{ x, y }], inicio }   (todos los del quad)
+//   control → { tipo: 'vertices', escena, i, k, puntos: [{ x, y }], inicio }   (todos los del quad)
 //   control → { tipo: 'deshacer', escena }
+//   control → { tipo: 'escena', id }  ·  { tipo: 'duracion', id, segundos }
+//   control → { tipo: 'reproducir', modo }  ·  { tipo: 'detener' }
+//   aquí    → { tipo: 'aplicado', ventana, escena, valores: { i: 0..1 } }   (cada 200 ms, con señal)
 // `ventana` es un id por pestaña: si control oye a dos, avisa. Los puntos van en las
 // coordenadas de siempre (centradas, en pixeles de esta ventana); `lienzo` le dice a
-// control a qué escala dibujarlos.
+// control a qué escala dibujarlos. `k` es el punto que se arrastra (-1 = la superficie
+// entera): sólo sirve para marcarlo en la proyección.
 
 const EDICION_CANAL = 'minimapper-edicion';
 const VENTANA_ID = Math.random().toString(36).slice(2, 10);
@@ -807,6 +811,8 @@ function estadoParaControl() {
   return {
     tipo: 'estado', ventana: VENTANA_ID, salida: SALIDA,
     escena: scenes[currentSceneIndex]?.id, numero: currentSceneIndex + 1,
+    escenas: scenes.map(s => ({ id: s.id, duracion: s.duration_s })),
+    reproduccion: { activa: isPlaying, modo: playbackMode },
     lienzo: { w: window.width || innerWidth, h: window.height || innerHeight },
     quads: quads.map((q, i) => {
       const c = quadColor(q);
@@ -873,9 +879,32 @@ function aplicarVerticesRemoto(m) {
   if (m.inicio) pushUndo();
   m.puntos.forEach((p, k) => { pts[k].x = p.x; pts[k].y = p.y; });
   if (!libre) buildTessCache(quad);
+  marcaRemota = { i: m.i, k: Number.isInteger(m.k) ? m.k : -1, visto: performance.now() };
   salidaGuarda = true;
   clearTimeout(guardarVertices);
   guardarVertices = setTimeout(() => { saveToLocalStorage(); updateCurrentSceneThumbnail(); }, 300);
+}
+
+// Escenas y reproducción, con las mismas funciones que el strip del panel. Las escenas
+// se nombran por id: el índice cambia si se borra una en otra ventana. Cambiar de escena
+// o reproducir no hace que ?salida empiece a guardar —es tocar, no editar—; la duración sí.
+function aplicarEscenaRemota(m) {
+  const indice = scenes.findIndex(s => s.id === m.id);
+  if (m.tipo === 'escena' && indice !== -1) {
+    if (isPlaying) stopPlayback();
+    switchScene(indice);
+  } else if (m.tipo === 'duracion' && indice !== -1 && typeof m.segundos === 'number' && isFinite(m.segundos)) {
+    scenes[indice].duration_s = Math.min(9999, Math.max(1, Math.round(m.segundos)));
+    salidaGuarda = true;
+    saveToLocalStorage();
+    renderSceneStrip();
+  } else if (m.tipo === 'reproducir' && ['once', 'loop', 'random'].includes(m.modo)) {
+    playbackMode = m.modo;
+    startPlayback();
+  } else if (m.tipo === 'detener') {
+    if (isPlaying) stopPlayback();
+  }
+  publicarEstado();
 }
 
 try {
@@ -887,9 +916,52 @@ try {
     else if (m.tipo === 'color') aplicarColorRemoto(m);
     else if (m.tipo === 'vertices') aplicarVerticesRemoto(m);
     else if (m.tipo === 'deshacer' && m.escena === scenes[currentSceneIndex]?.id) { salidaGuarda = true; undo(); }
+    else if (['escena', 'duracion', 'reproducir', 'detener'].includes(m.tipo)) aplicarEscenaRemota(m);
   };
 } catch (e) {
   canalEdicion = null;
+}
+
+// El valor que sale de cada quad con señal (lo que el panel muestra en `color-rampa`).
+// Va aparte del estado para no redibujar el mapa de control cinco veces por segundo.
+setInterval(() => {
+  if (!canalEdicion) return;
+  const valores = {};
+  quads.forEach((q, i) => { if (q.color && q.color.senal) valores[i] = q.color.rampa ?? 0; });
+  if (Object.keys(valores).length) {
+    canalEdicion.postMessage({ tipo: 'aplicado', ventana: VENTANA_ID, escena: scenes[currentSceneIndex]?.id, valores });
+  }
+}, 200);
+
+// Mientras control arrastra, la proyección marca el punto tomado (o los de la superficie
+// entera, con M): con video encima no se ve dónde cae una esquina en el muro. Se va sola
+// un segundo después del último mensaje. En modo edición no hace falta: los puntos ya se ven.
+let marcaRemota = null;
+const MARCA_DURA = 1000;
+
+function dibujarMarcaRemota() {
+  if (!marcaRemota || uiVisible) return;
+  const quad = quads[marcaRemota.i];
+  if (!quad || performance.now() - marcaRemota.visto > MARCA_DURA) { marcaRemota = null; return; }
+  const pts = quad.kind === 'freeform' ? quad.vertices : quad.points;
+  const cuales = marcaRemota.k >= 0 && pts[marcaRemota.k] ? [pts[marcaRemota.k]] : pts;
+  push();
+  resetMatrix();
+  noFill();
+  for (const p of cuales) {
+    // anillo blanco con borde negro y cruz: se lee sobre cualquier textura
+    stroke(0);
+    strokeWeight(5);
+    ellipse(p.x, p.y, 26, 26);
+    stroke(255);
+    strokeWeight(2);
+    ellipse(p.x, p.y, 26, 26);
+    line(p.x - 22, p.y, p.x - 8, p.y);
+    line(p.x + 8, p.y, p.x + 22, p.y);
+    line(p.x, p.y - 22, p.x, p.y - 8);
+    line(p.x, p.y + 8, p.x, p.y + 22);
+  }
+  pop();
 }
 
 // Un snapshot por gesto (al apretar el deslizador o una tecla), no por cada paso del arrastre.
@@ -1112,6 +1184,8 @@ function draw() {
 
     pop();
   }
+
+  dibujarMarcaRemota();
 }
 
 // releaseSources=false desmonta el quad sin matar lo que tiene que seguir vivo para volver:
@@ -2072,6 +2146,7 @@ function renderSceneStrip() {
     const btn = document.getElementById('pbtn-' + mode);
     if (btn) btn.classList.toggle('active', isPlaying && playbackMode === mode);
   });
+  publicarEstado();   // control/ ve las escenas y si se está reproduciendo
 }
 
 // --- REPRODUCCIÓN ---
