@@ -78,11 +78,24 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+function alternarPantallaCompleta() {
+  const el = document.documentElement;
+  const dentro = document.fullscreenElement || document.webkitFullscreenElement;
+  if (dentro) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  else (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('toggle-btn').classList.add('presentation');
   document.getElementById('info-btn').classList.remove('visible');
   loadFromLocalStorage();
-  if (SALIDA) { document.body.classList.add('salida'); return; }
+  if (SALIDA) {
+    document.body.classList.add('salida');
+    // La salida no tiene botones, y F11 en Windows a veces no responde (Fn+F11 duerme el
+    // equipo): doble clic entra y sale de pantalla completa. ESC también sale.
+    document.addEventListener('dblclick', alternarPantallaCompleta);
+    return;
+  }
   // El hint se proyectaría si la app se queda en presentación después de recargar.
   setTimeout(() => {
     if (!showHint) return;
