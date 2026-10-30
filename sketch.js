@@ -606,12 +606,11 @@ function cancelDrawing() {
 function finalizeQuad() {
   if (!drawStart || !drawCurrent) { cancelDrawing(); return; }
 
-  const x0 = min(drawStart.x, drawCurrent.x) - width / 2;
-  const x2 = max(drawStart.x, drawCurrent.x) - width / 2;
-  const y0 = min(drawStart.y, drawCurrent.y) - height / 2;
-  const y2 = max(drawStart.y, drawCurrent.y) - height / 2;
-
-  if (abs(x2 - x0) < 10 || abs(y2 - y0) < 10) { cancelDrawing(); return; }
+  // El tamaño mínimo se mide en pantalla; las esquinas, en los pixeles de la salida.
+  if (abs(drawCurrent.x - drawStart.x) < 10 || abs(drawCurrent.y - drawStart.y) < 10) { cancelDrawing(); return; }
+  const a = aMundo(min(drawStart.x, drawCurrent.x), min(drawStart.y, drawCurrent.y));
+  const b = aMundo(max(drawStart.x, drawCurrent.x), max(drawStart.y, drawCurrent.y));
+  const x0 = a.x, x2 = b.x, y0 = a.y, y2 = b.y;
 
   let points = [];
   for (let row = 0; row < 3; row++) {
@@ -833,7 +832,7 @@ function estadoParaControl() {
     reproduccion: { activa: isPlaying, modo: playbackMode },
     sigue: editorVivo(),
     marca: marcaParaSalida(),
-    lienzo: { w: window.width || innerWidth, h: window.height || innerHeight },
+    lienzo: lienzoComposicion(),
     quads: quads.map((q, i) => {
       const c = quadColor(q);
       const libre = q.kind === 'freeform';
@@ -1033,6 +1032,63 @@ function presentar() {
 function notarSalida(m) {
   if (SALIDA || !m.ventana || !m.lienzo) return;
   salidas.set(m.ventana, { visto: performance.now(), lienzo: m.lienzo });
+  lienzoTrabajo = { w: m.lienzo.w, h: m.lienzo.h };
+}
+
+// --- VISTA: EL EDITOR TRABAJA A LA RESOLUCIÓN DE LA SALIDA ---
+// Los puntos son pixeles de la ventana que proyecta. Con una salida abierta, el editor
+// dibuja el lienzo de la salida entero, escalado para caber a la derecha del panel, y
+// convierte el mouse con la inversa: lo que se ve aquí es lo que sale. El lienzo se
+// recuerda mientras el editor siga abierto, para que la vista no salte si la salida se
+// cierra un momento. Sólo en modo edición: en presentación el lienzo vuelve a 1:1. Es
+// vista, no datos: no toca los puntos ni se guarda. Los radios de captura y el tamaño de
+// los puntos siguen en pixeles de pantalla.
+
+let lienzoTrabajo = null;   // en el editor: el lienzo de la última salida que se oyó
+const VISTA_MARGEN = 24;
+
+// { s, ox, oy }: escala, y dónde cae en pantalla el centro del lienzo de la salida.
+function vista() {
+  const identidad = { s: 1, ox: width / 2, oy: height / 2 };
+  if (SALIDA || !uiVisible || !lienzoTrabajo) return identidad;
+  const x0 = Math.max(0, document.getElementById('ui').getBoundingClientRect().right);
+  const w = width - x0 - 2 * VISTA_MARGEN, h = height - 2 * VISTA_MARGEN;
+  if (w <= 0 || h <= 0) return identidad;
+  const s = Math.min(w / lienzoTrabajo.w, h / lienzoTrabajo.h);
+  return { s, ox: x0 + VISTA_MARGEN + w / 2, oy: height / 2 };
+}
+
+function aPantalla(p, v = vista()) {
+  return { x: v.ox + p.x * v.s, y: v.oy + p.y * v.s };
+}
+
+function aMundo(x, y, v = vista()) {
+  return { x: (x - v.ox) / v.s, y: (y - v.oy) / v.s };
+}
+
+// El lienzo en el que viven los puntos: el de la salida si hay, si no el de esta ventana.
+function lienzoComposicion() {
+  if (!SALIDA && lienzoTrabajo) return lienzoTrabajo;
+  return { w: window.width || innerWidth, h: window.height || innerHeight };
+}
+
+// Lo que queda fuera del lienzo de la salida no se proyecta: se oscurece, y el borde
+// se marca en ámbar. Se dibuja antes que los puntos, que tienen que alcanzarse aunque
+// hayan quedado afuera.
+function dibujarMarcoSalida(v) {
+  if (SALIDA || !lienzoTrabajo) return;
+  const fw = lienzoTrabajo.w * v.s, fh = lienzoTrabajo.h * v.s;
+  const fx = v.ox - fw / 2, fy = v.oy - fh / 2;
+  noStroke();
+  fill(0, 0, 0, 170);
+  rect(0, 0, width, fy);
+  rect(0, fy + fh, width, height - fy - fh);
+  rect(0, fy, fx, fh);
+  rect(fx + fw, fy, width - fx - fw, fh);
+  noFill();
+  stroke(255, 200, 64, 160);
+  strokeWeight(1);
+  rect(fx, fy, fw, fh);
 }
 
 // Puntos y color de cada quad, del estado del editor o de lo guardado. Si los quads no
@@ -1109,14 +1165,11 @@ if (SALIDA) {
     for (const [id, s] of salidas) if (ahora - s.visto > 3000) salidas.delete(id);
     const abiertas = [...salidas.values()];
     const s = abiertas[0];
-    // Los puntos son pixeles: con otra resolución la composición sale chica o cortada.
-    const distinta = s && (s.lienzo.w !== width || s.lienzo.h !== height);
     el.classList.toggle('vivo', !!s);
-    el.classList.toggle('aviso', !!distinta);
-    el.textContent = !s ? 'salida cerrada'
+    el.textContent = !s ? 'salida cerrada' + (lienzoTrabajo ? ` · vista a ${lienzoTrabajo.w}×${lienzoTrabajo.h}` : '')
       : abiertas.length > 1 ? `${abiertas.length} salidas abiertas`
-      : `salida abierta · ${s.lienzo.w}×${s.lienzo.h}` + (distinta ? ` · el editor es ${width}×${height}` : '');
-    el.title = distinta ? 'La salida tiene otra resolución que esta ventana: los puntos son pixeles y la composición no va a coincidir.' : '';
+      : `salida abierta · ${s.lienzo.w}×${s.lienzo.h}`;
+    el.title = lienzoTrabajo ? 'En modo edición, el lienzo se dibuja a la escala de la salida: lo que queda dentro del marco ámbar es lo que se proyecta.' : '';
   }, 1000);
 }
 
@@ -1192,6 +1245,12 @@ function draw() {
       advanceCarousels();
     }
   }
+
+  // Con una salida abierta, el editor dibuja a su escala (ver "VISTA"). Sin ella, identidad.
+  const v = vista();
+  push();
+  translate(v.ox - width / 2, v.oy - height / 2);
+  scale(v.s);
 
   for (let q = 0; q < quads.length; q++) {
     const quad = quads[q];
@@ -1278,6 +1337,7 @@ function draw() {
     }
     if (conShader) resetShader();
   }
+  pop();
 
   // Control points + crosshair — edit mode only
   if (uiVisible) {
@@ -1285,13 +1345,14 @@ function draw() {
     resetMatrix();
     translate(-width / 2, -height / 2);
 
+    dibujarMarcoSalida(v);
+
     noStroke();
     for (let q = 0; q < quads.length; q++) {
       const shape = quads[q];
       const pts = shape.kind === 'freeform' ? shape.vertices : shape.points;
       for (let i = 0; i < pts.length; i++) {
-        const sx = pts[i].x + width / 2;
-        const sy = pts[i].y + height / 2;
+        const { x: sx, y: sy } = aPantalla(pts[i], v);
         const isSelected = selected.quad === q && selected.vert === i;
         if (isSelected) {
           fill(255);
@@ -1325,13 +1386,12 @@ function draw() {
       strokeWeight(1);
       noFill();
       beginShape();
-      for (const v of freeformVerts) vertex(v.x + width / 2, v.y + height / 2);
+      for (const fv of freeformVerts) { const p = aPantalla(fv, v); vertex(p.x, p.y); }
       vertex(mouseX, mouseY);
       endShape();
       noStroke();
       for (let i = 0; i < freeformVerts.length; i++) {
-        const sx = freeformVerts[i].x + width / 2;
-        const sy = freeformVerts[i].y + height / 2;
+        const { x: sx, y: sy } = aPantalla(freeformVerts[i], v);
         const closeable = i === 0 && freeformVerts.length >= 3 && dist(mouseX, mouseY, sx, sy) < 15;
         fill(closeable ? color(0, 220, 80) : color(255, 0, 0));
         ellipse(sx, sy, closeable ? 14 : 10, closeable ? 14 : 10);
@@ -1959,12 +2019,14 @@ function mousePressed() {
   if (freeformMode) {
     if (freeformVerts.length >= 3) {
       const first = freeformVerts[0];
-      if (dist(mouseX, mouseY, first.x + width / 2, first.y + height / 2) < 15) {
+      const p = aPantalla(first);
+      if (dist(mouseX, mouseY, p.x, p.y) < 15) {
         finalizeFreeform();
         return;
       }
     }
-    freeformVerts.push(createVector(mouseX - width / 2, mouseY - height / 2));
+    const m = aMundo(mouseX, mouseY);
+    freeformVerts.push(createVector(m.x, m.y));
     return;
   }
 
@@ -1974,12 +2036,12 @@ function mousePressed() {
     return;
   }
 
+  const v = vista();
   for (let q = 0; q < quads.length; q++) {
     const shape = quads[q];
     const pts = shape.kind === 'freeform' ? shape.vertices : shape.points;
     for (let i = 0; i < pts.length; i++) {
-      const sx = pts[i].x + width / 2;
-      const sy = pts[i].y + height / 2;
+      const { x: sx, y: sy } = aPantalla(pts[i], v);
       if (dist(mouseX, mouseY, sx, sy) < 10) {
         pushUndo();
         selected = { quad: q, vert: i, move: keyIsDown(77) };
@@ -1999,20 +2061,19 @@ function mouseDragged() {
 
   if (selected.quad != -1) {
     const shape = quads[selected.quad];
+    const v = vista();
     if (selected.move) { // M was held at click time — move whole shape
-      const dx = mouseX - pmouseX;
-      const dy = mouseY - pmouseY;
+      const dx = (mouseX - pmouseX) / v.s;
+      const dy = (mouseY - pmouseY) / v.s;
       const pts = shape.kind === 'freeform' ? shape.vertices : shape.points;
       for (const p of pts) { p.x += dx; p.y += dy; }
       if (shape.kind !== 'freeform') buildTessCache(shape);
-    } else if (shape.kind === 'freeform') {
-      shape.vertices[selected.vert].x = mouseX - width / 2;
-      shape.vertices[selected.vert].y = mouseY - height / 2;
     } else {
-      const pt = shape.points[selected.vert];
-      pt.x = mouseX - width / 2;
-      pt.y = mouseY - height / 2;
-      buildTessCache(shape);
+      const m = aMundo(mouseX, mouseY, v);
+      const pt = shape.kind === 'freeform' ? shape.vertices[selected.vert] : shape.points[selected.vert];
+      pt.x = m.x;
+      pt.y = m.y;
+      if (shape.kind !== 'freeform') buildTessCache(shape);
     }
     publicarEstado();   // control/ sigue el arrastre (se junta en un mensaje cada 50 ms)
   }
@@ -2191,8 +2252,9 @@ function renderSceneThumbnail(canvas, sceneData) {
     return;
   }
 
-  const refW = (typeof width !== 'undefined' ? width : 1280) / 2;
-  const refH = (typeof height !== 'undefined' ? height : 720) / 2;
+  const ref = lienzoComposicion();
+  const refW = ref.w / 2;
+  const refH = ref.h / 2;
   const toTX = x => (x / refW * 0.82 + 1) / 2 * W;
   const toTY = y => (y / refH * 0.82 + 1) / 2 * H;
 
