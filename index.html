@@ -76,6 +76,14 @@
   <button id="panel-collapse" onclick="togglePanelCollapse()" title="Colapsar panel">‹</button>
 
     <div class="panel-section">
+      <button class="wide-btn" onclick="presentar()"
+        title="Abre la salida en otra ventana: llévala al proyector y dale doble clic para pantalla completa. Sigue lo que hagas aquí.">
+        <span class="wide-icon">▭</span>Presentar
+      </button>
+      <div id="salida-estado">salida cerrada</div>
+    </div>
+
+    <div class="panel-section">
       <div class="section-label">superficies</div>
       <div class="section-actions">
         <button id="add-quad-btn" onclick="startDrawingQuad()">+ Quad</button>

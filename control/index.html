@@ -287,6 +287,8 @@
       const m = e.data
       if (m?.tipo === 'aplicado') return mostrarAplicado(m)
       if (!m || m.tipo !== 'estado') return
+      // Una salida que sigue a un editor no es otra dueña: lo que cuenta es el editor.
+      if (m.sigue) return
       ventanas.set(m.ventana, { visto: performance.now(), salida: m.salida })
       // Mientras se arrastra, los puntos de ese quad son los de aquí: el estado que llega
       // puede venir un paso atrás.

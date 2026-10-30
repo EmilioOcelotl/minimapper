@@ -5,8 +5,9 @@ let showHint = true;
 
 // index.html?salida es la ventana que va al proyector: sólo el resultado. Nunca
 // entra a edición, no muestra ✦, hint, ayuda, HUD ni cursor, ignora el teclado y
-// no escribe en localStorage, para no pisar lo que se edita en otra ventana. Empieza a
-// guardar cuando control/ le manda el primer color: desde ahí es la dueña del estado.
+// no escribe en localStorage, para no pisar lo que se edita en otra ventana. Con un
+// editor abierto lo sigue (ver "PRESENTAR"). Sin editor, empieza a guardar cuando
+// control/ le manda el primer color: desde ahí es la dueña del estado.
 const SALIDA = new URLSearchParams(location.search).has('salida');
 let salidaGuarda = false;
 
@@ -325,7 +326,7 @@ function serializableQuads(quadsData) {
 
 function saveToLocalStorage() {
   publicarEstado();   // un color movido en el panel también le llega a control/
-  if (SALIDA && !salidaGuarda) return;
+  if (SALIDA && (!salidaGuarda || editorVivo())) return;
   try {
     snapshotCurrentScene();
     const config = {
@@ -697,6 +698,7 @@ function setQuadColor(index, campo, valor) {
   c[campo] = campo === 'tinte' ? valor : parseFloat(valor);
   const out = document.getElementById(`color-${campo}-${index}`);
   if (out && campo !== 'tinte') out.textContent = c[campo].toFixed(2);
+  publicarEstado();   // la salida y control/ siguen el deslizador, no sólo al soltarlo
 }
 
 // Conectar el nivel a una lectura de control/ ('' = manual). Con señal, el deslizador
@@ -808,6 +810,9 @@ setInterval(() => {
 //   control → { tipo: 'escena', id }  ·  { tipo: 'duracion', id, segundos }
 //   control → { tipo: 'reproducir', modo }  ·  { tipo: 'detener' }
 //   aquí    → { tipo: 'aplicado', ventana, escena, valores: { i: 0..1 } }   (cada 200 ms, con señal)
+//   salida  → { tipo: 'pedir', ventana, lienzo: { w, h } }   (cada segundo; ver "PRESENTAR")
+// `estado` lleva también `marca` (el punto que se arrastra, para la salida) y `sigue`
+// (es una salida que sigue a un editor: control/ no la cuenta como otra dueña).
 // `ventana` es un id por pestaña: si control oye a dos, avisa. Los puntos van en las
 // coordenadas de siempre (centradas, en pixeles de esta ventana); `lienzo` le dice a
 // control a qué escala dibujarlos. `k` es el punto que se arrastra (-1 = la superficie
@@ -826,6 +831,8 @@ function estadoParaControl() {
     escena: scenes[currentSceneIndex]?.id, numero: currentSceneIndex + 1,
     escenas: scenes.map(s => ({ id: s.id, duracion: s.duration_s })),
     reproduccion: { activa: isPlaying, modo: playbackMode },
+    sigue: editorVivo(),
+    marca: marcaParaSalida(),
     lienzo: { w: window.width || innerWidth, h: window.height || innerHeight },
     quads: quads.map((q, i) => {
       const c = quadColor(q);
@@ -925,8 +932,11 @@ try {
   canalEdicion.onmessage = (e) => {
     const m = e.data;
     if (!m) return;
-    if (m.tipo === 'pedir') publicarEstado();
-    else if (m.tipo === 'color') aplicarColorRemoto(m);
+    if (m.tipo === 'estado') { if (SALIDA && !m.salida) seguirEditor(m); return; }
+    if (m.tipo === 'pedir') { notarSalida(m); publicarEstado(); return; }
+    // Con un editor abierto, lo que mande control/ lo aplica el editor y esta ventana lo sigue.
+    if (editorVivo()) return;
+    if (m.tipo === 'color') aplicarColorRemoto(m);
     else if (m.tipo === 'vertices') aplicarVerticesRemoto(m);
     else if (m.tipo === 'deshacer' && m.escena === scenes[currentSceneIndex]?.id) { salidaGuarda = true; undo(); }
     else if (['escena', 'duracion', 'reproducir', 'detener'].includes(m.tipo)) aplicarEscenaRemota(m);
@@ -975,6 +985,139 @@ function dibujarMarcaRemota() {
     line(p.x, p.y + 8, p.x, p.y + 22);
   }
   pop();
+}
+
+// --- PRESENTAR: LA SALIDA SIGUE AL EDITOR ---
+// El editor (index.html) es el dueño del estado y la salida (?salida) lo sigue. Lo vivo
+// —puntos, color y el punto que se arrastra— llega en el mismo `estado` que lee control/,
+// juntado cada 50 ms mientras algo cambia. Lo de estructura —quads nuevos o borrados,
+// fuentes, código Hydra, otra escena— llega por localStorage: el editor ya guarda en cada
+// uno de esos cambios, y el evento `storage` le avisa a la salida. Mientras oye a un
+// editor, la salida no guarda ni hace caso a control/. Ver control/NOTAS.md, "Cambio de rumbo".
+
+let ventanaSalida = null;     // en el editor: la ventana que abrió Presentar
+const salidas = new Map();    // en el editor: id → { visto, lienzo }
+let editorUltimo = 0;         // en la salida: cuándo llegó el último estado de un editor
+let editorReproduce = false;
+let firmaMontada = null;      // la estructura de la escena montada (ver firmaEscena)
+
+function editorVivo() {
+  return SALIDA && performance.now() - editorUltimo < 3000;
+}
+
+// Lo que obliga a montar la escena de nuevo: número y forma de los quads y sus fuentes.
+// No entran los puntos ni el color, que se siguen en vivo, ni el código Hydra, que basta
+// con volver a ejecutar.
+function firmaEscena(sceneData) {
+  return JSON.stringify((sceneData?.quads || []).map(q => [
+    q.kind === 'freeform' ? 'freeform' : 'quad', q.sourceType || 'hydra',
+    (q.sourceUrl || '').startsWith('http') ? q.sourceUrl : '', q.hydraOutput ?? null,
+    (q.kind === 'freeform' ? q.vertices : q.points)?.length || 0,
+  ]));
+}
+
+// El punto que se arrastra aquí (o desde control/), para que la salida lo marque.
+function marcaParaSalida() {
+  if (SALIDA) return null;
+  if (selected.quad !== -1) return { i: selected.quad, k: selected.move ? -1 : selected.vert };
+  if (marcaRemota && performance.now() - marcaRemota.visto < 100) return { i: marcaRemota.i, k: marcaRemota.k };
+  return null;
+}
+
+function presentar() {
+  if (ventanaSalida && !ventanaSalida.closed) { ventanaSalida.focus(); return; }
+  saveToLocalStorage();   // la salida arranca de lo guardado
+  ventanaSalida = window.open('?salida', 'minimapper-salida', 'popup,width=960,height=540');
+}
+
+function notarSalida(m) {
+  if (SALIDA || !m.ventana || !m.lienzo) return;
+  salidas.set(m.ventana, { visto: performance.now(), lienzo: m.lienzo });
+}
+
+// Puntos y color de cada quad, del estado del editor o de lo guardado. Si los quads no
+// coinciden en número, forma o fuente, la estructura cambió y está por llegar el
+// `storage`: mover puntos por índice ahora movería el quad equivocado.
+function seguirQuads(datos) {
+  const forma = q => q.kind === 'freeform' ? 'freeform' : 'quad';
+  if (datos.length !== quads.length) return;
+  if (!datos.every((d, i) => forma(d) === forma(quads[i]) && (d.fuente || d.sourceType || 'hydra') === quads[i].sourceType)) return;
+  datos.forEach((d, i) => {
+    const q = quads[i];
+    const pts = forma(q) === 'freeform' ? q.vertices : q.points;
+    const nuevos = d.puntos || (forma(q) === 'freeform' ? d.vertices : d.points) || [];
+    if (nuevos.length === pts.length && nuevos.some((p, k) => p.x !== pts[k].x || p.y !== pts[k].y)) {
+      nuevos.forEach((p, k) => { pts[k].x = p.x; pts[k].y = p.y; });
+      if (forma(q) === 'quad') buildTessCache(q);
+    }
+    q.color = { ...COLOR_NEUTRO, ...d.color, rampa: q.color?.rampa };
+  });
+}
+
+function seguirEditor(m) {
+  editorUltimo = performance.now();
+  editorReproduce = !!m.reproduccion?.activa;
+  if (m.escena !== scenes[currentSceneIndex]?.id) return;   // la otra escena llega por storage
+  seguirQuads(m.quads || []);
+  if (m.marca && quads[m.marca.i]) marcaRemota = { i: m.marca.i, k: m.marca.k, visto: performance.now() };
+}
+
+// El editor guardó: otra escena, otra estructura, otro código Hydra, o sólo puntos y color
+// (que normalmente ya llegaron por el estado).
+function seguirGuardado() {
+  let config;
+  try { config = JSON.parse(localStorage.getItem('minimapper_config')); } catch (e) { return; }
+  if (!config?.scenes?.length) return;
+  const montada = scenes[currentSceneIndex]?.id;
+  scenes = config.scenes.map(s => ({ id: s.id, duration_s: s.duration_s || 30, hydraCode: s.hydraCode || '', quads: s.quads || [] }));
+  playbackMode = config.playbackMode || 'once';
+  const indice = Math.min(config.currentSceneIndex || 0, scenes.length - 1);
+  const escena = scenes[indice];
+  currentSceneIndex = indice;   // la misma escena puede cambiar de lugar si se borra otra
+  if (escena.id !== montada || firmaEscena(escena) !== firmaMontada) {
+    const montar = () => { _applySceneData(scenes[indice]); renderSceneStrip(); };
+    // En reproducción, el mismo fundido que advanceScene().
+    if (!editorReproduce || escena.id === montada) { montar(); return; }
+    const fadeEl = document.getElementById('scene-fade');
+    fadeEl.classList.add('fading');
+    setTimeout(() => { montar(); fadeEl.classList.remove('fading'); }, 350);
+    return;
+  }
+  escena.quads.forEach((d, i) => {
+    const q = quads[i];
+    if (q && q.sourceType === 'hydra' && d.hydraCode != null && d.hydraCode !== q.hydraCode) {
+      q.hydraCode = d.hydraCode;
+      evalHydra(d.hydraCode);
+    }
+  });
+  seguirQuads(escena.quads);
+}
+
+if (SALIDA) {
+  // firmaMontada en null: setup() todavía no monta la escena, y sin p5 no hay createVector.
+  window.addEventListener('storage', e => {
+    if (e.key === 'minimapper_config' && firmaMontada !== null) seguirGuardado();
+  });
+  setInterval(() => {
+    if (canalEdicion) canalEdicion.postMessage({ tipo: 'pedir', ventana: VENTANA_ID, lienzo: { w: window.width || innerWidth, h: window.height || innerHeight } });
+  }, 1000);
+} else {
+  setInterval(() => {
+    const el = document.getElementById('salida-estado');
+    if (!el) return;
+    const ahora = performance.now();
+    for (const [id, s] of salidas) if (ahora - s.visto > 3000) salidas.delete(id);
+    const abiertas = [...salidas.values()];
+    const s = abiertas[0];
+    // Los puntos son pixeles: con otra resolución la composición sale chica o cortada.
+    const distinta = s && (s.lienzo.w !== width || s.lienzo.h !== height);
+    el.classList.toggle('vivo', !!s);
+    el.classList.toggle('aviso', !!distinta);
+    el.textContent = !s ? 'salida cerrada'
+      : abiertas.length > 1 ? `${abiertas.length} salidas abiertas`
+      : `salida abierta · ${s.lienzo.w}×${s.lienzo.h}` + (distinta ? ` · el editor es ${width}×${height}` : '');
+    el.title = distinta ? 'La salida tiene otra resolución que esta ventana: los puntos son pixeles y la composición no va a coincidir.' : '';
+  }, 1000);
 }
 
 // Un snapshot por gesto (al apretar el deslizador o una tecla), no por cada paso del arrastre.
@@ -1288,6 +1431,7 @@ function changeQuadSource(index, type) {
   } else {
     renderQuadList();
   }
+  saveToLocalStorage();   // sin esto el tipo se perdía al recargar, y la salida no se entera
 }
 
 function startCamera(index) {
@@ -1926,6 +2070,7 @@ function snapshotCurrentScene() {
 }
 
 function _applySceneData(sceneData) {
+  firmaMontada = firmaEscena(sceneData);
   quads.forEach((_, i) => clearQuadSource(i, false));
   quads = [];
   hydraSlots = [0, 0, 0, 0];

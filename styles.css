@@ -1039,8 +1039,9 @@ select option {
   color: rgb(150, 255, 200);
 }
 
-/* --- Estado de control/ (lecturas por BroadcastChannel) --- */
-#control-estado {
+/* --- Estado de control/ (lecturas por BroadcastChannel) y de la salida --- */
+#control-estado,
+#salida-estado {
   display: block;
   margin-top: 8px;
   font-family: monospace;
@@ -1052,7 +1053,8 @@ select option {
   text-overflow: ellipsis;
 }
 
-#control-estado::before {
+#control-estado::before,
+#salida-estado::before {
   content: '●';
   margin-right: 6px;
   color: rgba(255, 255, 255, 0.2);
@@ -1061,6 +1063,9 @@ select option {
 #control-estado.vivo { color: rgba(255, 255, 255, 0.7); }
 #control-estado.vivo::before { color: rgb(90, 230, 150); }
 #control-estado:hover { color: rgba(255, 255, 255, 0.85); }
+#salida-estado.vivo { color: rgba(255, 255, 255, 0.7); }
+#salida-estado.vivo::before { color: rgb(90, 230, 150); }
+#salida-estado.aviso::before { color: #ffc840; }
 
 /* --- Ventana de salida (index.html?salida): sólo el resultado --- */
 body.salida #toggle-btn,
