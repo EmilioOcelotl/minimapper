@@ -1086,6 +1086,61 @@ select option {
 
 .pestana[data-pestana="interaccion"] { overflow-y: auto; }
 
+/* --- Salidas: uno o dos proyectores (renderMontaje) --- */
+#presentar-botones {
+  display: flex;
+  gap: 6px;
+}
+
+#presentar-botones .wide-btn { flex: 1; min-width: 0; }
+
+.montaje-fila {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 0;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.montaje-fila select { flex: 1; min-width: 0; margin: 0; }
+
+.montaje-nota {
+  margin: 12px 0 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+#salida-estado .ambar { color: rgb(255, 200, 64); }
+#salida-estado .vivo { color: rgba(255, 255, 255, 0.7); }
+
+.etiqueta-salida {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 40;
+  font-family: monospace;
+  font-size: 14px;
+  color: rgba(255, 200, 64, 0.85);
+  pointer-events: none;
+}
+
+#letra-salida { display: none; }
+
+body.salida.dos:not(.completa) #letra-salida {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: monospace;
+  font-size: 30vh;
+  color: rgba(255, 200, 64, 0.9);
+  text-shadow: 0 0 24px #000;
+  pointer-events: none;
+}
+
 /* --- Interacción: mouse y cámara como lecturas, en el panel --- */
 #sensor-xy {
   position: relative;

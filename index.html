@@ -76,10 +76,13 @@
   <button id="panel-collapse" onclick="togglePanelCollapse()" title="Colapsar panel">‹</button>
 
     <div class="panel-section">
-      <button class="wide-btn" onclick="presentar()"
-        title="Abre la salida en otra ventana: llévala al proyector y dale doble clic para pantalla completa. Sigue lo que hagas aquí.">
-        <span class="wide-icon">▭</span>Presentar
-      </button>
+      <!-- Uno o dos botones según el montaje (renderMontaje): un clic abre una ventana. -->
+      <div id="presentar-botones">
+        <button class="wide-btn" onclick="presentar('A')"
+          title="Abre la salida en otra ventana: llévala al proyector y dale doble clic para pantalla completa. Sigue lo que hagas aquí.">
+          <span class="wide-icon">▭</span>Presentar
+        </button>
+      </div>
       <div id="salida-estado">salida cerrada</div>
     </div>
 
@@ -88,6 +91,8 @@
       <button role="tab" data-pestana="mapear" onclick="mostrarPestana('mapear')">mapear</button>
       <button role="tab" data-pestana="interaccion" onclick="mostrarPestana('interaccion')"
         title="Mouse y cámara como lecturas para las superficies y para Hydra">interacción</button>
+      <button role="tab" data-pestana="salidas" onclick="mostrarPestana('salidas')"
+        title="Uno o dos proyectores y la resolución de cada uno">salidas</button>
     </div>
 
     <div class="pestana" data-pestana="mapear" role="tabpanel">
@@ -135,6 +140,22 @@
     </div>
     </div>
 
+    <div class="pestana" data-pestana="salidas" role="tabpanel">
+    <div class="panel-section">
+      <div class="section-label">proyectores</div>
+      <div class="section-actions">
+        <button id="montaje-1" onclick="setMontajeN(1)">1 salida</button>
+        <button id="montaje-2" onclick="setMontajeN(2)" title="Un lienzo continuo en dos proyectores, lado a lado: A a la izquierda, B a la derecha">2 salidas</button>
+      </div>
+      <div id="montaje-res"></div>
+      <p class="montaje-nota">Con dos salidas, el lienzo es el de los dos proyectores juntos, y cada
+        uno muestra su parte. Presentar abre A y B por separado: lleva cada ventana a su
+        proyector y dale doble clic. Lo que ya estaba queda en el centro, sobre la costura.</p>
+      <p class="montaje-nota">La resolución es la del proyector. Si la pantalla de una salida no
+        coincide, su línea de arriba se pone en ámbar: la imagen se escala.</p>
+    </div>
+    </div>
+
     <div class="panel-section session-section">
       <button class="wide-btn" onclick="saveSession()"
         title="Descarga un archivo .json con todas las escenas, superficies y código">
@@ -147,6 +168,11 @@
     </div>
 
   </div>
+
+  <!-- Con dos salidas: la letra de cada marco en el editor y, en la salida, en grande -->
+  <div id="etiqueta-salida-A" class="etiqueta-salida" hidden>A</div>
+  <div id="etiqueta-salida-B" class="etiqueta-salida" hidden>B</div>
+  <div id="letra-salida"></div>
 
   <!-- Fade entre escenas -->
   <div id="scene-fade"></div>

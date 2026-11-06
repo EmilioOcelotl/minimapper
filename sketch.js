@@ -8,6 +8,8 @@ let showHint = true;
 // no escribe nunca en localStorage: el dueño del estado es el editor, y la salida lo
 // sigue (ver "PRESENTAR"). Sin editor, se queda con lo guardado al cargar.
 const SALIDA = new URLSearchParams(location.search).has('salida');
+// Con dos proyectores, cada salida es una región del lienzo: ?salida=A o ?salida=B.
+const SALIDA_ID = SALIDA && new URLSearchParams(location.search).get('salida') === 'B' ? 'B' : 'A';
 
 function toggleEditMode() {
   if (SALIDA) return;
@@ -44,7 +46,7 @@ function togglePanelCollapse() {
 
 // Pestañas del panel. Presentar (arriba) y la sesión (abajo) quedan fuera de ellas: se usan
 // desde cualquier pestaña. La pestaña abierta se recuerda entre recargas.
-const PESTANAS = ['mapear', 'interaccion'];
+const PESTANAS = ['mapear', 'interaccion', 'salidas'];
 let pestanaActiva = 'mapear';
 
 function mostrarPestana(nombre) {
@@ -59,6 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let guardada = null;
   try { guardada = localStorage.getItem('minimapper_pestana'); } catch (e) {}
   mostrarPestana(guardada || 'mapear');
+  renderMontaje();
 });
 
 // Modal de bienvenida / ayuda. En la primera visita se muestra solo (marca en
@@ -112,6 +115,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // La salida no tiene botones, y F11 en Windows a veces no responde (Fn+F11 duerme el
     // equipo): doble clic entra y sale de pantalla completa. ESC también sale.
     document.addEventListener('dblclick', alternarPantallaCompleta);
+    // Con dos salidas, la letra en grande dice a qué proyector va esta ventana, hasta que
+    // entra a pantalla completa.
+    document.getElementById('letra-salida').textContent = SALIDA_ID;
+    const completa = () => document.body.classList.toggle('completa', !!(document.fullscreenElement || document.webkitFullscreenElement));
+    document.addEventListener('fullscreenchange', completa);
+    document.addEventListener('webkitfullscreenchange', completa);
+    actualizarSalidaDOM();
     return;
   }
   // El hint se proyectaría si la app se queda en presentación después de recargar.
@@ -220,7 +230,8 @@ function saveSession() {
         : serializableQuads(s.quads)
     })),
     currentSceneIndex,
-    playbackMode
+    playbackMode,
+    montaje
   };
   const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -263,7 +274,8 @@ function normalizeSession(session) {
         quads: s.quads || []
       })),
       currentSceneIndex: session.currentSceneIndex || 0,
-      playbackMode: session.playbackMode || 'once'
+      playbackMode: session.playbackMode || 'once',
+      montaje: session.montaje
     };
   }
   return {
@@ -283,6 +295,8 @@ function applySession(session) {
   scenes = normalized.scenes;
   currentSceneIndex = Math.min(normalized.currentSceneIndex, scenes.length - 1);
   playbackMode = normalized.playbackMode;
+  // Una sesión sin montaje (anterior a las dos salidas) deja el que hay.
+  if (normalized.montaje) { montaje = normalizarMontaje(normalized.montaje); renderMontaje(); }
   // Las capturas que estaban aparcadas en las escenas que esta sesión reemplaza no las
   // alcanzó el clearQuadSource() de arriba, que sólo tocó los quads vivos.
   releaseScreenSources(dropped);
@@ -349,7 +363,8 @@ function saveToLocalStorage() {
     const config = {
       scenes: scenes.map(s => ({ id: s.id, duration_s: s.duration_s, hydraCode: s.hydraCode || '', quads: serializableQuads(s.quads) })),
       currentSceneIndex,
-      playbackMode
+      playbackMode,
+      montaje
     };
     localStorage.setItem("minimapper_config", JSON.stringify(config));
   } catch (e) {
@@ -362,6 +377,7 @@ function loadFromLocalStorage() {
     const saved = localStorage.getItem("minimapper_config");
     if (!saved) { renderSceneStrip(); return; }
     const config = JSON.parse(saved);
+    montaje = normalizarMontaje(config.montaje);
 
     if (config.scenes && config.scenes.length > 0) {
       scenes = config.scenes.map(s => ({
@@ -1051,7 +1067,8 @@ function dibujarMarcaRemota() {
   const quad = quads[marcaRemota.i];
   if (!quad || performance.now() - marcaRemota.visto > MARCA_DURA) { marcaRemota = null; return; }
   const pts = quad.kind === 'freeform' ? quad.vertices : quad.points;
-  const cuales = marcaRemota.k >= 0 && pts[marcaRemota.k] ? [pts[marcaRemota.k]] : pts;
+  const cuales = (marcaRemota.k >= 0 && pts[marcaRemota.k] ? [pts[marcaRemota.k]] : pts)
+    .map(q => { const e = aPantalla(q); return { x: e.x - width / 2, y: e.y - height / 2 }; });
   push();
   resetMatrix();
   noFill();
@@ -1078,8 +1095,8 @@ function dibujarMarcaRemota() {
 // otra escena— llega por localStorage: el editor ya guarda en cada uno de esos cambios, y
 // el evento `storage` le avisa a la salida. La salida no guarda nunca.
 
-let ventanaSalida = null;     // en el editor: la ventana que abrió Presentar
-const salidas = new Map();    // en el editor: id → { visto, lienzo }
+const ventanasSalida = {};    // en el editor: 'A' / 'B' → la ventana que abrió Presentar
+const salidas = new Map();    // en el editor: id de ventana → { id, visto, lienzo, pantalla }
 let editorReproduce = false;
 let firmaMontada = null;      // la estructura de la escena montada (ver firmaEscena)
 
@@ -1101,16 +1118,132 @@ function marcaParaSalida() {
   return null;
 }
 
-function presentar() {
-  if (ventanaSalida && !ventanaSalida.closed) { ventanaSalida.focus(); return; }
+// Un clic, una ventana: el navegador bloquea la segunda si un mismo clic abre dos. Por eso
+// con dos salidas hay dos botones.
+function presentar(id = 'A') {
+  const w = ventanasSalida[id];
+  if (w && !w.closed) { w.focus(); return; }
   saveToLocalStorage();   // la salida arranca de lo guardado
-  ventanaSalida = window.open('?salida', 'minimapper-salida', 'popup,width=960,height=540');
+  ventanasSalida[id] = window.open('?salida=' + id, 'minimapper-salida-' + id, 'popup,width=960,height=540');
 }
 
 function notarSalida(m) {
   if (SALIDA || !m.ventana || !m.lienzo) return;
-  salidas.set(m.ventana, { visto: performance.now(), lienzo: m.lienzo });
-  lienzoTrabajo = { w: m.lienzo.w, h: m.lienzo.h };
+  salidas.set(m.ventana, { id: m.id === 'B' ? 'B' : 'A', visto: performance.now(), lienzo: m.lienzo, pantalla: m.pantalla });
+  // Sólo cuenta en "ventana": con resolución fija, el lienzo lo pone el montaje.
+  if (!regiones()) lienzoTrabajo = { w: m.lienzo.w, h: m.lienzo.h };
+}
+
+// --- MONTAJE: UNA O DOS SALIDAS ---
+// Pestaña "salidas". Con una salida en "ventana", todo es como siempre: el lienzo es el de
+// la ventana que proyecta. Con resolución fija, o con dos salidas, el lienzo lo pone el
+// montaje: las regiones van lado a lado (A a la izquierda) y centradas en el origen, así que
+// una composición que ya existía queda en el centro, encima de la costura. Cada salida dibuja
+// su región escalada a su ventana (1:1 en pantalla completa a esa resolución). Es del montaje,
+// no de la obra: se guarda con la sesión, no por escena. Ver CLAUDE.md, "Lienzo extendido".
+
+const RESOLUCIONES = { '1280x800': { w: 1280, h: 800 }, '1920x1080': { w: 1920, h: 1080 } };
+let montaje = { n: 1, res: ['ventana', '1920x1080'] };
+
+function normalizarMontaje(m) {
+  const n = m && m.n === 2 ? 2 : 1;
+  const r = Array.isArray(m && m.res) ? m.res : [];
+  const a = r[0] in RESOLUCIONES || (n === 1 && r[0] === 'ventana') ? r[0] : (n === 1 ? 'ventana' : '1920x1080');
+  const b = r[1] in RESOLUCIONES ? r[1] : '1920x1080';
+  return { n, res: [a, b] };
+}
+
+// Las regiones en coordenadas de puntos. null: "ventana", sin región fija.
+function regiones() {
+  if (montaje.n === 1 && montaje.res[0] === 'ventana') return null;
+  const ids = montaje.n === 2 ? ['A', 'B'] : ['A'];
+  const tams = ids.map((_, i) => RESOLUCIONES[montaje.res[i]]);
+  let x = -tams.reduce((t, r) => t + r.w, 0) / 2;
+  return ids.map((id, i) => {
+    const r = { id, x, y: -tams[i].h / 2, w: tams[i].w, h: tams[i].h };
+    x += tams[i].w;
+    return r;
+  });
+}
+
+function lienzoMontaje() {
+  const rs = regiones();
+  return rs ? { w: rs.reduce((t, r) => t + r.w, 0), h: Math.max(...rs.map(r => r.h)) } : null;
+}
+
+// En la salida: la región que le toca. Una B con montaje de una salida muestra la A.
+function regionPropia() {
+  const rs = regiones();
+  return rs ? (rs.find(r => r.id === SALIDA_ID) || rs[0]) : null;
+}
+
+function setMontajeN(n) {
+  montaje = normalizarMontaje({ n, res: [montaje.res[0] === 'ventana' && n === 2 ? '1920x1080' : montaje.res[0], montaje.res[1]] });
+  saveToLocalStorage();
+  renderMontaje();
+}
+
+function setMontajeRes(i, valor) {
+  const res = [...montaje.res];
+  res[i] = valor;
+  montaje = normalizarMontaje({ n: montaje.n, res });
+  saveToLocalStorage();
+  renderMontaje();
+}
+
+// La pestaña "salidas" y los botones de Presentar.
+function renderMontaje() {
+  if (SALIDA) return;
+  const dos = montaje.n === 2;
+  document.getElementById('montaje-1')?.classList.toggle('active', !dos);
+  document.getElementById('montaje-2')?.classList.toggle('active', dos);
+  const opciones = (i, actual) => [...(dos ? [] : [['ventana', 'ventana (como siempre)']]), ['1280x800', '1280×800'], ['1920x1080', '1920×1080']]
+    .map(([v, t]) => `<option value="${v}" ${v === actual ? 'selected' : ''}>${t}</option>`).join('');
+  const filas = (dos ? ['A', 'B'] : ['A']).map((id, i) =>
+    `<label class="montaje-fila">${dos ? id : 'salida'}<select onchange="setMontajeRes(${i}, this.value)">${opciones(i, montaje.res[i])}</select></label>`);
+  const res = document.getElementById('montaje-res');
+  if (res) res.innerHTML = filas.join('');
+  const botones = document.getElementById('presentar-botones');
+  if (botones) botones.innerHTML = (dos ? ['A', 'B'] : ['A']).map(id =>
+    `<button class="wide-btn" onclick="presentar('${id}')" title="Abre la salida${dos ? ' ' + id : ''} en otra ventana: llévala ${dos ? 'a su' : 'al'} proyector y dale doble clic para pantalla completa. Sigue lo que hagas aquí.">` +
+    `<span class="wide-icon">▭</span>Presentar${dos ? ' ' + id : ''}</button>`).join('');
+}
+
+// En la salida: la letra en grande sólo con dos salidas.
+function actualizarSalidaDOM() {
+  if (SALIDA) document.body.classList.toggle('dos', montaje.n === 2);
+}
+
+// Lo de afuera de la región no se proyecta: con una ventana de otra proporción, los quads
+// que se salen, o la región vecina, se verían en las franjas.
+function enmascararRegion(v) {
+  const r = regionPropia();
+  if (!r) return;
+  const a = aPantalla({ x: r.x, y: r.y }, v), b = aPantalla({ x: r.x + r.w, y: r.y + r.h }, v);
+  push();
+  resetMatrix();
+  translate(-width / 2, -height / 2);
+  noStroke();
+  fill(0);
+  rect(0, 0, width, a.y);
+  rect(0, b.y, width, height - b.y);
+  rect(0, a.y, a.x, b.y - a.y);
+  rect(b.x, a.y, width - b.x, b.y - a.y);
+  pop();
+}
+
+// En el editor: la letra de cada salida sobre su marco (DOM: el texto en WEBGL pide una fuente).
+function etiquetarSalidas(v) {
+  const rs = !SALIDA && uiVisible && montaje.n === 2 ? regiones() : null;
+  ['A', 'B'].forEach(id => {
+    const el = document.getElementById('etiqueta-salida-' + id);
+    if (!el) return;
+    const r = rs && rs.find(x => x.id === id);
+    el.hidden = !r;
+    if (!r) return;
+    const e = aPantalla({ x: r.x, y: r.y }, v);
+    el.style.transform = `translate(${Math.round(e.x + 8)}px, ${Math.round(e.y + 6)}px)`;
+  });
 }
 
 // --- VISTA: EL EDITOR TRABAJA A LA RESOLUCIÓN DE LA SALIDA ---
@@ -1128,11 +1261,19 @@ const VISTA_MARGEN = 24;
 // { s, ox, oy }: escala, y dónde cae en pantalla el centro del lienzo de la salida.
 function vista() {
   const identidad = { s: 1, ox: width / 2, oy: height / 2 };
-  if (SALIDA || !uiVisible || !lienzoTrabajo) return identidad;
+  if (SALIDA) {
+    // Su región, escalada para caber y centrada (ver MONTAJE). Sin región, 1:1 como siempre.
+    const r = regionPropia();
+    if (!r) return identidad;
+    const s = Math.min(width / r.w, height / r.h);
+    return { s, ox: width / 2 - (r.x + r.w / 2) * s, oy: height / 2 - (r.y + r.h / 2) * s };
+  }
+  const L = lienzoMontaje() || lienzoTrabajo;
+  if (!uiVisible || !L) return identidad;
   const x0 = Math.max(0, document.getElementById('ui').getBoundingClientRect().right);
   const w = width - x0 - 2 * VISTA_MARGEN, h = height - 2 * VISTA_MARGEN;
   if (w <= 0 || h <= 0) return identidad;
-  const s = Math.min(w / lienzoTrabajo.w, h / lienzoTrabajo.h);
+  const s = Math.min(w / L.w, h / L.h);
   return { s, ox: x0 + VISTA_MARGEN + w / 2, oy: height / 2 };
 }
 
@@ -1146,6 +1287,8 @@ function aMundo(x, y, v = vista()) {
 
 // El lienzo en el que viven los puntos: el de la salida si hay, si no el de esta ventana.
 function lienzoComposicion() {
+  const L = lienzoMontaje();
+  if (L) return L;
   if (!SALIDA && lienzoTrabajo) return lienzoTrabajo;
   return { w: window.width || innerWidth, h: window.height || innerHeight };
 }
@@ -1154,19 +1297,28 @@ function lienzoComposicion() {
 // se marca en ámbar. Se dibuja antes que los puntos, que tienen que alcanzarse aunque
 // hayan quedado afuera.
 function dibujarMarcoSalida(v) {
-  if (SALIDA || !lienzoTrabajo) return;
-  const fw = lienzoTrabajo.w * v.s, fh = lienzoTrabajo.h * v.s;
-  const fx = v.ox - fw / 2, fy = v.oy - fh / 2;
+  if (SALIDA) return;
+  const L = lienzoTrabajo;
+  const rs = regiones() || (L ? [{ id: '', x: -L.w / 2, y: -L.h / 2, w: L.w, h: L.h }] : null);
+  if (!rs) return;
+  const p = rs.map(r => { const a = aPantalla({ x: r.x, y: r.y }, v); return { x: a.x, y: a.y, w: r.w * v.s, h: r.h * v.s }; });
+  const x0 = Math.min(...p.map(r => r.x)), x1 = Math.max(...p.map(r => r.x + r.w));
+  const y0 = Math.min(...p.map(r => r.y)), y1 = Math.max(...p.map(r => r.y + r.h));
   noStroke();
   fill(0, 0, 0, 170);
-  rect(0, 0, width, fy);
-  rect(0, fy + fh, width, height - fy - fh);
-  rect(0, fy, fx, fh);
-  rect(fx + fw, fy, width - fx - fw, fh);
+  rect(0, 0, width, y0);
+  rect(0, y1, width, height - y1);
+  rect(0, y0, x0, y1 - y0);
+  rect(x1, y0, width - x1, y1 - y0);
+  // Con dos regiones de distinta altura, lo que queda arriba y abajo de la más baja.
+  for (const r of p) {
+    if (r.y > y0) rect(r.x, y0, r.w, r.y - y0);
+    if (r.y + r.h < y1) rect(r.x, r.y + r.h, r.w, y1 - r.y - r.h);
+  }
   noFill();
   stroke(255, 200, 64, 160);
   strokeWeight(1);
-  rect(fx, fy, fw, fh);
+  for (const r of p) rect(r.x, r.y, r.w, r.h);
 }
 
 // Puntos y color de cada quad, del estado del editor o de lo guardado. Si los quads no
@@ -1219,9 +1371,13 @@ function fuentesParaSalida() {
 // recién abierta o recargada, a una fuente nueva y a la escena nueva sin avisos aparte.
 // La salida no rehace nada si ya tiene el mismo stream.
 function entregarFuentes() {
-  if (SALIDA || !ventanaSalida || ventanaSalida.closed) return;
-  try { ventanaSalida.recibirFuentes?.(scenes[currentSceneIndex]?.id, fuentesParaSalida()); }
-  catch (e) { console.warn('no se pudieron pasar las fuentes a la salida', e); }
+  if (SALIDA) return;
+  const lista = fuentesParaSalida();
+  for (const w of Object.values(ventanasSalida)) {
+    if (!w || w.closed) continue;
+    try { w.recibirFuentes?.(scenes[currentSceneIndex]?.id, lista); }
+    catch (e) { console.warn('no se pudieron pasar las fuentes a la salida', e); }
+  }
 }
 
 // En la salida: ¿la abrió un editor con Presentar? Si sí, la cámara la pone él.
@@ -1307,6 +1463,8 @@ function seguirGuardado() {
   const montada = scenes[currentSceneIndex]?.id;
   scenes = config.scenes.map(s => ({ id: s.id, duration_s: s.duration_s || 30, hydraCode: s.hydraCode || '', quads: s.quads || [] }));
   playbackMode = config.playbackMode || 'once';
+  montaje = normalizarMontaje(config.montaje);
+  actualizarSalidaDOM();
   const indice = Math.min(config.currentSceneIndex || 0, scenes.length - 1);
   const escena = scenes[indice];
   currentSceneIndex = indice;   // la misma escena puede cambiar de lugar si se borra otra
@@ -1335,7 +1493,11 @@ if (SALIDA) {
     if (e.key === 'minimapper_config' && firmaMontada !== null) seguirGuardado();
   });
   setInterval(() => {
-    if (canalEdicion) canalEdicion.postMessage({ tipo: 'pedir', ventana: VENTANA_ID, lienzo: { w: window.width || innerWidth, h: window.height || innerHeight } });
+    const dpr = window.devicePixelRatio || 1;
+    if (canalEdicion) canalEdicion.postMessage({ tipo: 'pedir', ventana: VENTANA_ID, id: SALIDA_ID,
+      lienzo: { w: window.width || innerWidth, h: window.height || innerHeight },
+      // En pixeles físicos: un 1920×1080 al 150% de Windows le dice 1280×720 a la página.
+      pantalla: { w: Math.round(screen.width * dpr), h: Math.round(screen.height * dpr) } });
   }, 1000);
 } else {
   setInterval(() => {
@@ -1344,12 +1506,30 @@ if (SALIDA) {
     const ahora = performance.now();
     for (const [id, s] of salidas) if (ahora - s.visto > 3000) salidas.delete(id);
     const abiertas = [...salidas.values()];
-    const s = abiertas[0];
-    el.classList.toggle('vivo', !!s);
-    el.textContent = !s ? 'salida cerrada' + (lienzoTrabajo ? ` · vista a ${lienzoTrabajo.w}×${lienzoTrabajo.h}` : '')
-      : abiertas.length > 1 ? `${abiertas.length} salidas abiertas`
-      : `salida abierta · ${s.lienzo.w}×${s.lienzo.h}`;
-    el.title = lienzoTrabajo ? 'En modo edición, el lienzo se dibuja a la escala de la salida: lo que queda dentro del marco ámbar es lo que se proyecta.' : '';
+    const rs = regiones();
+    if (!rs) {
+      // "ventana": como siempre, la salida pone el tamaño.
+      const s = abiertas[0];
+      el.classList.toggle('vivo', !!s);
+      el.textContent = !s ? 'salida cerrada' + (lienzoTrabajo ? ` · vista a ${lienzoTrabajo.w}×${lienzoTrabajo.h}` : '')
+        : abiertas.length > 1 ? `${abiertas.length} salidas abiertas`
+        : `salida abierta · ${s.lienzo.w}×${s.lienzo.h}`;
+      el.title = lienzoTrabajo ? 'En modo edición, el lienzo se dibuja a la escala de la salida: lo que queda dentro del marco ámbar es lo que se proyecta.' : '';
+      return;
+    }
+    // Resolución fija: una línea por salida. En ámbar si la pantalla en la que está la
+    // ventana no es la resolución elegida: se va a escalar.
+    el.classList.toggle('vivo', abiertas.length > 0);
+    el.innerHTML = rs.map(r => {
+      const s = abiertas.find(x => x.id === r.id);
+      const nombre = rs.length > 1 ? r.id + ' · ' : '';
+      if (!s) return `<span>${nombre}${r.w}×${r.h} · cerrada</span>`;
+      const p = s.pantalla;
+      const distinta = p && (p.w !== r.w || p.h !== r.h);
+      return `<span class="${distinta ? 'ambar' : 'vivo'}">${nombre}${r.w}×${r.h} · abierta` +
+        (distinta ? ` · su pantalla es ${p.w}×${p.h}: se escala` : '') + '</span>';
+    }).join('<br>');
+    el.title = 'En modo edición se ve el lienzo entero: cada marco ámbar es lo que proyecta una salida.';
   }, 1000);
 }
 
@@ -1518,6 +1698,8 @@ function draw() {
     if (conShader) resetShader();
   }
   pop();
+  if (SALIDA) enmascararRegion(v);
+  else etiquetarSalidas(v);
 
   // Control points + crosshair — edit mode only
   if (uiVisible) {
