@@ -1001,6 +1001,8 @@ function estadoParaControl() {
       return {
         i, nombre: `${libre ? 'Libre' : 'Quad'} ${i}`, kind: libre ? 'freeform' : 'quad', fuente: q.sourceType,
         puntos: (libre ? q.vertices : q.points).map(p => ({ x: p.x, y: p.y })),
+        // Un archivo local del editor: la salida puede abrir su blob: mientras el editor viva.
+        local: !SALIDA && q.sourceUrl && q.sourceUrl.startsWith('blob:') ? q.sourceUrl : undefined,
         color: { nivel: c.nivel, saturacion: c.saturacion, tinte: c.tinte,
                  senal: c.senal || '', destino: c.destino || 'nivel', invertir: !!c.invertir },
       };
@@ -1094,7 +1096,7 @@ try {
     const m = e.data;
     if (!m) return;
     if (m.tipo === 'estado') { if (SALIDA && !m.salida) seguirEditor(m); return; }
-    if (m.tipo === 'pedir') { notarSalida(m); publicarEstado(); return; }
+    if (m.tipo === 'pedir') { notarSalida(m); publicarEstado(); entregarFuentes(); return; }
     // Con un editor abierto, lo que mande control/ lo aplica el editor y esta ventana lo sigue.
     if (editorVivo()) return;
     if (m.tipo === 'color') aplicarColorRemoto(m);
@@ -1277,7 +1279,110 @@ function seguirEditor(m) {
   editorReproduce = !!m.reproduccion?.activa;
   if (m.escena !== scenes[currentSceneIndex]?.id) return;   // la otra escena llega por storage
   seguirQuads(m.quads || []);
+  seguirArchivosLocales(m.quads || []);
   if (m.marca && quads[m.marca.i]) marcaRemota = { i: m.marca.i, k: m.marca.k, visto: performance.now() };
+}
+
+// --- FUENTES DEL EDITOR EN LA SALIDA ---
+// Paso 4 de "Control desde el modo edición". Lo que no viaja como texto vive en la máquina
+// del editor y la salida lo toma prestado: un archivo local por su blob: (en el estado, ver
+// estadoParaControl) y la cámara y la pantalla por la referencia de window.open(), porque un
+// MediaStream no cabe en un mensaje. La salida no tiene botones para pedir la pantalla, y
+// la cámara la pedía por su cuenta, con un alert() en el proyector si no había permiso.
+// Probado en Chromium y Firefox (control/NOTAS.md, "Paso 4: prueba previa"). Al cerrar el
+// editor, lo prestado se acaba: el editor es el dueño.
+
+// En el editor: lo que tiene vivo, por quad de la escena montada.
+function fuentesParaSalida() {
+  return quads.map((q, i) => {
+    const stream = q.sourceType === 'camera' ? q.sourceEl?.elt?.srcObject
+                 : q.sourceType === 'pantalla' ? q.sourceVideo?.srcObject : null;
+    if (stream && stream.getVideoTracks().some(t => t.readyState === 'live')) return { i, tipo: q.sourceType, stream };
+    return null;
+  }).filter(Boolean);
+}
+
+// En el editor, cada vez que la salida pide (una vez por segundo): así llega a una salida
+// recién abierta o recargada, a una fuente nueva y a la escena nueva sin avisos aparte.
+// La salida no rehace nada si ya tiene el mismo stream.
+function entregarFuentes() {
+  if (SALIDA || !ventanaSalida || ventanaSalida.closed) return;
+  try { ventanaSalida.recibirFuentes?.(scenes[currentSceneIndex]?.id, fuentesParaSalida()); }
+  catch (e) { console.warn('no se pudieron pasar las fuentes a la salida', e); }
+}
+
+// En la salida: ¿la abrió un editor con Presentar? Si sí, la cámara la pone él.
+function editorQueAbrio() {
+  try { return SALIDA && window.opener && !window.opener.closed && typeof window.opener.fuentesParaSalida === 'function'; }
+  catch (e) { return false; }
+}
+
+// En la salida. Un préstamo es un <video> propio con un clon del stream y su proxy, por id
+// del stream original. El clon importa: parar sus tracks no le apaga la fuente al editor.
+const prestamos = new Map();
+let fuentesEditor = null;   // { escena, lista }: la última entrega
+
+function recibirFuentes(escena, lista) {
+  if (!SALIDA) return;
+  fuentesEditor = { escena, lista: lista || [] };
+  aplicarFuentesEditor();
+}
+
+function soltarPrestamo(id) {
+  const p = prestamos.get(id);
+  if (!p) return;
+  prestamos.delete(id);
+  p.videoEl.srcObject?.getTracks().forEach(t => t.stop());
+  p.videoEl.srcObject = null;
+  p.videoEl.remove();
+  quads.forEach(q => { if (q.sourceVideo === p.videoEl) { q.sourceVideo = null; q.sourceEl = null; q.prestado = false; } });
+  p.proxy.remove();
+}
+
+function aplicarFuentesEditor() {
+  if (!SALIDA || !fuentesEditor) return;
+  const vivos = new Set(fuentesEditor.lista.map(f => f.stream.id));
+  for (const id of [...prestamos.keys()]) if (!vivos.has(id)) soltarPrestamo(id);
+  if (fuentesEditor.escena !== scenes[currentSceneIndex]?.id) return;   // llega con el próximo pedir
+  for (const f of fuentesEditor.lista) {
+    const q = quads[f.i];
+    if (!q || q.sourceType !== f.tipo) continue;   // la estructura todavía no llega por storage
+    let p = prestamos.get(f.stream.id);
+    if (p && q.sourceVideo === p.videoEl) continue;
+    if (!p) {
+      const videoEl = document.createElement('video');
+      videoEl.muted = true;
+      videoEl.playsInline = true;
+      videoEl.style.display = 'none';
+      document.body.appendChild(videoEl);
+      videoEl.srcObject = f.stream.clone();
+      videoEl.play().catch(() => {});
+      // Se cortó del lado del editor (dejó de compartir, se cerró): el quad vuelve a negro.
+      videoEl.srcObject.getVideoTracks()[0]?.addEventListener('ended', () => soltarPrestamo(f.stream.id));
+      p = { videoEl, proxy: createGraphics(512, 512) };
+      prestamos.set(f.stream.id, p);
+    }
+    q.sourceVideo = p.videoEl;
+    q.sourceEl = p.proxy;
+    q.prestado = true;
+  }
+}
+
+// Al cerrar el editor, el clon no siempre avisa `ended` (Chromium deja el track vivo y sin
+// cuadros): sin editor que preste, se suelta todo.
+if (SALIDA) setInterval(() => {
+  if (prestamos.size && !editorQueAbrio()) [...prestamos.keys()].forEach(soltarPrestamo);
+}, 1000);
+
+// En la salida: el archivo local del editor, por su blob:. Sólo si el quad ya es de ese tipo.
+function seguirArchivosLocales(datos) {
+  datos.forEach((d, i) => {
+    const q = quads[i];
+    if (!d.local || !q || q.sourceType !== d.fuente || (d.fuente !== 'video' && d.fuente !== 'image')) return;
+    if (q.sourceUrl === d.local) return;
+    clearQuadSource(i);
+    restoreLocalSource(i, d.local);
+  });
 }
 
 // El editor guardó: otra escena, otra estructura, otro código Hydra, o sólo puntos y color
@@ -1571,6 +1676,13 @@ function draw() {
 // escena, donde el quad se desarma pero la fuente sigue siendo de alguien.
 function clearQuadSource(index, releaseSources = true) {
   const quad = quads[index];
+  if (quad.prestado) {
+    // En la salida: el <video> y su proxy son del registro de préstamos (aplicarFuentesEditor).
+    quad.sourceVideo = null;
+    quad.sourceEl = null;
+    quad.prestado = false;
+    return;
+  }
   if (quad.sourceType === 'hydra') {
     releaseHydraSlot(quad.hydraOutput);
     quad.hydraOutput = null;
@@ -1580,7 +1692,8 @@ function clearQuadSource(index, releaseSources = true) {
     quad.carouselIndex = 0;
   }
   if (quad.sourceUrl) {
-    if (releaseSources && !quad.sourceUrl.startsWith('http')) URL.revokeObjectURL(quad.sourceUrl);
+    // La salida no crea blob:, sólo abre los del editor: revocarlos se los rompería a él.
+    if (releaseSources && !SALIDA && !quad.sourceUrl.startsWith('http')) URL.revokeObjectURL(quad.sourceUrl);
     quad.sourceUrl = null;
   }
   if (quad.sourceVideo) {
@@ -1657,6 +1770,7 @@ function changeQuadSource(index, type) {
 }
 
 function startCamera(index) {
+  if (editorQueAbrio()) return;   // la cámara la presta el editor (ver aplicarFuentesEditor)
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     alert("Tu navegador no soporta acceso a cámara.");
     quads[index].sourceType = 'grid';
@@ -2334,6 +2448,7 @@ function _applySceneData(sceneData) {
       evalHydra(q.hydraCode);
     }
   });
+  aplicarFuentesEditor();
   renderQuadList();
 }
 
