@@ -225,6 +225,7 @@ function saveSession() {
             if (q.sourceType === 'hydra') { data.hydraCode = q.hydraCode || ''; data.hydraOutput = q.hydraOutput ?? 0; }
             const color = colorParaGuardar(q.color);
             if (color) data.color = color;
+            if (q.recorte) data.recorte = q.recorte;
             return data;
           })
         : serializableQuads(s.quads)
@@ -316,10 +317,10 @@ function applySession(session) {
     }
     let quad;
     if (qData.kind === 'freeform') {
-      quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, color: { ...COLOR_NEUTRO, ...qData.color } };
+      quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, color: { ...COLOR_NEUTRO, ...qData.color }, recorte: normalizarRecorte(qData.recorte) };
     } else {
       const pts = qData.points || qData;
-      quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, color: { ...COLOR_NEUTRO, ...qData.color } };
+      quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, color: { ...COLOR_NEUTRO, ...qData.color }, recorte: normalizarRecorte(qData.recorte) };
       buildTessCache(quad);
     }
     quads.push(quad);
@@ -733,6 +734,30 @@ function setQuadColor(index, campo, valor) {
   publicarEstado();   // la salida sigue el deslizador, no sólo al soltarlo
 }
 
+// --- RECORTE DE TEXTURA ---
+// Qué parte de la fuente muestra el quad, como un rango de u (horizontal). Con dos
+// proyectores, un quad en cada uno con su mitad de la misma textura: la continuidad se
+// calibra arrastrando esquinas, cosa que un solo quad que cruzara la costura no permite
+// (el parche no hace el quiebre). null = la textura completa. Ver CLAUDE.md, "Recorte".
+const RECORTES = { completa: null, izquierda: { u0: 0, u1: 0.5 }, derecha: { u0: 0.5, u1: 1 } };
+
+function normalizarRecorte(r) {
+  if (!r || typeof r.u0 !== 'number' || typeof r.u1 !== 'number') return null;
+  const u0 = Math.min(1, Math.max(0, r.u0)), u1 = Math.min(1, Math.max(0, r.u1));
+  return u1 > u0 && !(u0 === 0 && u1 === 1) ? { u0, u1 } : null;
+}
+
+function nombreRecorte(r) {
+  const n = Object.keys(RECORTES).find(k => RECORTES[k] && r && RECORTES[k].u0 === r.u0 && RECORTES[k].u1 === r.u1);
+  return n || (r ? 'otro' : 'completa');
+}
+
+function setQuadRecorte(index, nombre) {
+  if (!quads[index] || !(nombre in RECORTES)) return;
+  quads[index].recorte = RECORTES[nombre] ? { ...RECORTES[nombre] } : null;
+  saveToLocalStorage();   // y la salida lo toma con el estado
+}
+
 // Conectar el nivel a una lectura ('' = manual). Con señal, el deslizador
 // de nivel es el máximo y la lectura decide cuánto de ese máximo sale.
 function setQuadSenal(index, senal) {
@@ -1026,6 +1051,7 @@ function estadoParaSalida() {
         puntos: (libre ? q.vertices : q.points).map(p => ({ x: p.x, y: p.y })),
         // Un archivo local del editor: la salida puede abrir su blob: mientras el editor viva.
         local: !SALIDA && q.sourceUrl && q.sourceUrl.startsWith('blob:') ? q.sourceUrl : undefined,
+        recorte: q.recorte || null,
         color: { nivel: c.nivel, saturacion: c.saturacion, tinte: c.tinte,
                  senal: c.senal || '', destino: c.destino || 'nivel', invertir: !!c.invertir },
       };
@@ -1337,6 +1363,7 @@ function seguirQuads(datos) {
       if (forma(q) === 'quad') buildTessCache(q);
     }
     q.color = { ...COLOR_NEUTRO, ...d.color, rampa: q.color?.rampa };
+    q.recorte = normalizarRecorte(d.recorte);
   });
 }
 
@@ -1665,23 +1692,27 @@ function draw() {
         if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
       }
       const dX = maxX - minX || 1, dY = maxY - minY || 1;
+      const ru = quad.recorte ? quad.recorte.u0 : 0, rw = quad.recorte ? quad.recorte.u1 - quad.recorte.u0 : 1;
+      const uF = x => ru + (x - minX) / dX * rw;   // el recorte de textura, si hay
       let cx = 0, cy = 0;
       for (const v of verts) { cx += v.x; cy += v.y; }
       cx /= n; cy /= n;
       beginShape(TRIANGLES);
       for (let i = 0; i < n; i++) {
         const a = verts[i], b = verts[(i + 1) % n];
-        vertex(cx, cy, (cx - minX) / dX, (cy - minY) / dY);
-        vertex(a.x, a.y, (a.x - minX) / dX, (a.y - minY) / dY);
-        vertex(b.x, b.y, (b.x - minX) / dX, (b.y - minY) / dY);
+        vertex(cx, cy, uF(cx), (cy - minY) / dY);
+        vertex(a.x, a.y, uF(a.x), (a.y - minY) / dY);
+        vertex(b.x, b.y, uF(b.x), (b.y - minY) / dY);
       }
       endShape();
     } else {
       const cache = quad.tessCache;
+      // El recorte de textura, si hay: u va de ru a ru + rw en vez de 0 a 1.
+      const ru = quad.recorte ? quad.recorte.u0 : 0, rw = quad.recorte ? quad.recorte.u1 - quad.recorte.u0 : 1;
       beginShape(TRIANGLES);
       for (let j = 0; j < TESS; j++) {
         for (let i = 0; i < TESS; i++) {
-          const u0 = i / TESS,         u1 = (i + 1) / TESS;
+          const u0 = ru + i / TESS * rw, u1 = ru + (i + 1) / TESS * rw;
           const v0 = j / TESS,         v1 = (j + 1) / TESS;
           const p00 = cache[j][i],     p10 = cache[j][i + 1];
           const p11 = cache[j+1][i+1], p01 = cache[j+1][i];
@@ -2333,7 +2364,12 @@ function renderQuadList() {
       : '';
 
     const c = quadColor(q);
+    const recorteActual = nombreRecorte(q.recorte);
     const colorSection = `<div class="quad-color">
+        <label title="Qué parte de la fuente muestra esta superficie. Con dos proyectores: un quad en cada uno, con su mitad de la misma textura">parte<select onchange="setQuadRecorte(${i}, this.value)">
+          ${[['completa', 'completa'], ['izquierda', 'mitad izquierda'], ['derecha', 'mitad derecha'], ...(recorteActual === 'otro' ? [['otro', `${q.recorte.u0}–${q.recorte.u1}`]] : [])].map(([v, t]) =>
+            `<option value="${v}" ${recorteActual === v ? 'selected' : ''}>${t}</option>`).join('')}
+        </select><span></span></label>
         <label>nivel<input type="range" min="0" max="1.5" step="0.01" value="${c.nivel}" onpointerdown="undoColor()" onkeydown="undoColor(event)"
           oninput="setQuadColor(${i},'nivel',this.value)" onchange="saveToLocalStorage()"><output id="color-nivel-${i}">${c.nivel.toFixed(2)}</output></label>
         <label>saturación<input type="range" min="0" max="2" step="0.01" value="${c.saturacion}" onpointerdown="undoColor()" onkeydown="undoColor(event)"
@@ -2493,6 +2529,7 @@ function snapshotCurrentScene() {
     if (q.carousel && q.carousel.length) { data.carousel = q.carousel; data.carouselIndex = q.carouselIndex || 0; }
     const color = colorParaGuardar(q.color);
     if (color) data.color = color;
+    if (q.recorte) data.recorte = q.recorte;
     // Se guarda el elemento entero, no el stream: una compartición no se reanuda, sólo se
     // mantiene. Y con él su proxy, para no dejar un p5.Graphics tirado por cada ida y vuelta.
     if (q.sourceType === 'pantalla' && q.sourceVideo) data.screenSource = { videoEl: q.sourceVideo, proxy: q.sourceEl };
@@ -2521,9 +2558,9 @@ function _applySceneData(sceneData) {
       hydraSlots[hydraOutput]++;
     }
     if (q.kind === 'freeform') {
-      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0, color: { ...COLOR_NEUTRO, ...q.color } };
+      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0, color: { ...COLOR_NEUTRO, ...q.color }, recorte: normalizarRecorte(q.recorte) };
     }
-    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0, color: { ...COLOR_NEUTRO, ...q.color } };
+    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0, color: { ...COLOR_NEUTRO, ...q.color }, recorte: normalizarRecorte(q.recorte) };
     buildTessCache(quad);
     return quad;
   });
