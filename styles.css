@@ -1084,7 +1084,8 @@ select option {
 
 .pestana.activa { display: flex; }
 
-.pestana[data-pestana="interaccion"] { overflow-y: auto; }
+.pestana[data-pestana="interaccion"],
+.pestana[data-pestana="salidas"] { overflow-y: auto; }
 
 /* --- Salidas: uno o dos proyectores (renderMontaje) --- */
 #presentar-botones {
@@ -1123,6 +1124,21 @@ select option {
   font-size: 14px;
   color: rgba(255, 200, 64, 0.85);
   pointer-events: none;
+}
+
+/* Color por ventana: la misma rejilla de controles que el color de los quads */
+.correccion-titulo { margin: 16px 0 0; }
+.quad-color.correccion { border-top: none; }
+.quad-color.correccion label { grid-template-columns: 76px 1fr 36px; }
+
+/* Patrones de prueba: sólo en la salida, dentro del filtro de su ventana */
+#patron { display: none; }
+body.salida #patron[class^="patron-"] { display: block; position: fixed; inset: 0; z-index: 55; }
+#patron.patron-blanco { background: #fff; }
+#patron.patron-gris { background: #808080; }
+#patron.patron-barras {
+  background: linear-gradient(90deg, #fff 0 14.28%, #ff0 0 28.57%, #0ff 0 42.85%, #0f0 0 57.14%,
+                                     #f0f 0 71.42%, #f00 0 85.71%, #00f 0);
 }
 
 #letra-salida { display: none; }

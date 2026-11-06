@@ -1040,6 +1040,7 @@ let estadoPendiente = false;
 function estadoParaSalida() {
   return {
     tipo: 'estado', ventana: VENTANA_ID, salida: SALIDA, t0: relojBase,
+    correccion: montaje.color, patron: { ...patrones },
     escena: scenes[currentSceneIndex]?.id,
     reproduccion: { activa: isPlaying, modo: playbackMode },
     marca: marcaParaSalida(),
@@ -1169,14 +1170,28 @@ function notarSalida(m) {
 // no de la obra: se guarda con la sesión, no por escena. Ver CLAUDE.md, "Lienzo extendido".
 
 const RESOLUCIONES = { '1280x800': { w: 1280, h: 800 }, '1920x1080': { w: 1920, h: 1080 } };
-let montaje = { n: 1, res: ['ventana', '1920x1080'], hydra: 'alta' };
+// Corrección de color por ventana (paso 5): para igualar proyectores con lámparas distintas.
+// tono en grados; temperatura de -1 (fría, más azul) a 1 (cálida, más roja).
+const CORRECCION_NEUTRA = { brillo: 1, contraste: 1, saturacion: 1, tono: 0, temperatura: 0 };
+const CORRECCION_RANGOS = { brillo: [0.5, 1.5], contraste: [0.5, 1.5], saturacion: [0, 2], tono: [-180, 180], temperatura: [-1, 1] };
+let montaje = { n: 1, res: ['ventana', '1920x1080'], hydra: 'alta', color: { A: { ...CORRECCION_NEUTRA }, B: { ...CORRECCION_NEUTRA } } };
+
+function normalizarCorreccion(c) {
+  const out = { ...CORRECCION_NEUTRA };
+  for (const [k, [lo, hi]] of Object.entries(CORRECCION_RANGOS)) {
+    const v = c && c[k];
+    if (typeof v === 'number' && isFinite(v)) out[k] = Math.min(hi, Math.max(lo, v));
+  }
+  return out;
+}
 
 function normalizarMontaje(m) {
   const n = m && m.n === 2 ? 2 : 1;
   const r = Array.isArray(m && m.res) ? m.res : [];
   const a = r[0] in RESOLUCIONES || (n === 1 && r[0] === 'ventana') ? r[0] : (n === 1 ? 'ventana' : '1920x1080');
   const b = r[1] in RESOLUCIONES ? r[1] : '1920x1080';
-  return { n, res: [a, b], hydra: m && m.hydra === 'normal' ? 'normal' : 'alta' };
+  return { n, res: [a, b], hydra: m && m.hydra === 'normal' ? 'normal' : 'alta',
+           color: { A: normalizarCorreccion(m && m.color && m.color.A), B: normalizarCorreccion(m && m.color && m.color.B) } };
 }
 
 // Las regiones en coordenadas de puntos. null: "ventana", sin región fija.
@@ -1250,7 +1265,12 @@ function aplicarResolucionHydra() {
   if (typeof hydra === 'undefined' || !hydra.setResolution || !hydraCanvases.length) return;
   const r = resolucionHydra();
   if (hydra.width === r.w && hydra.height === r.h && hydraCanvases[0].width === r.w) return;
+  // setResolution() escribe las globales width y height, que en modo global son las de p5:
+  // sin devolverlas, la vista, el mouse y los marcos quedarían al tamaño de la textura.
+  const w = width, h = height;
   hydra.setResolution(r.w, r.h);
+  window.width = w;
+  window.height = h;
   hydraCanvases = hydraCanvases.map(g => { g.remove(); return createGraphics(r.w, r.h); });
 }
 
@@ -1258,6 +1278,69 @@ function sincronizarRelojHydra() {
   if (montaje.n !== 2 || typeof hydra === 'undefined' || !hydra.synth) return;
   hydra.synth.time = (Date.now() - relojBase) / 1000 * (hydra.synth.speed ?? 1);
 }
+
+// --- COLOR POR VENTANA Y PATRONES DE PRUEBA ---
+// Paso 5 del plan. Para igualar dos proyectores con lámparas distintas: brillo, contraste,
+// saturación, tono y temperatura por salida, aplicados en la salida como filtro CSS (más una
+// matriz SVG para la temperatura) sobre el canvas, sin tocar el render. Es calibración, no
+// expresión: va en el montaje, no en la escena, y el editor no la aplica (muestra la
+// composición tal cual). Los patrones (blanco, gris 50%, barras) se dibujan dentro del mismo
+// filtro, porque sin eso no sirven para calibrar, y no se guardan: viven mientras el editor
+// los mande, para que una salida recargada sin editor no se quede proyectando gris.
+const PATRONES = { no: 'nada', blanco: 'blanco', gris: 'gris 50%', barras: 'barras de color' };
+const patrones = { A: 'no', B: 'no' };   // en el editor: lo que se pide; en la salida: lo que se ve
+let patronVisto = 0;                     // en la salida: cuándo llegó el último estado con patrón
+
+function setCorreccion(id, campo, valor) {
+  const c = montaje.color[id];
+  if (!c || !(campo in CORRECCION_RANGOS)) return;
+  c[campo] = normalizarCorreccion({ ...c, [campo]: parseFloat(valor) })[campo];
+  const out = document.getElementById(`correccion-${campo}-${id}`);
+  if (out) out.textContent = campo === 'tono' ? Math.round(c[campo]) + '°' : c[campo].toFixed(2);
+  publicarEstado();   // en vivo; se guarda al soltar
+}
+
+function resetCorreccion(id) {
+  montaje.color[id] = { ...CORRECCION_NEUTRA };
+  saveToLocalStorage();
+  renderMontaje();
+}
+
+function setPatron(id, valor) {
+  if (!(valor in PATRONES)) return;
+  patrones[id] = valor;
+  publicarEstado();
+}
+
+function correccionEsNeutra(c) {
+  return !c || Object.keys(CORRECCION_NEUTRA).every(k => c[k] === CORRECCION_NEUTRA[k]);
+}
+
+// En la salida: filtro sobre el canvas y sobre el patrón. Sin corrección, sin filtro.
+function aplicarCorreccion() {
+  if (!SALIDA) return;
+  const c = montaje.color[SALIDA_ID];
+  let filtro = 'none';
+  if (!correccionEsNeutra(c)) {
+    const t = c.temperatura * 0.2;   // ±20% de rojo y azul en los extremos
+    const matriz = document.getElementById('temperatura-matriz');
+    if (matriz) matriz.setAttribute('values', `${1 + t} 0 0 0 0  0 ${1 + t * 0.1} 0 0 0  0 0 ${1 - t} 0 0  0 0 0 1 0`);
+    filtro = `brightness(${c.brillo}) contrast(${c.contraste}) saturate(${c.saturacion}) hue-rotate(${c.tono}deg)` +
+             (c.temperatura ? ' url(#temperatura)' : '');
+  }
+  const lienzo = document.getElementById('defaultCanvas0');   // el de p5, no los proxies
+  if (lienzo) lienzo.style.filter = filtro;
+  const patron = document.getElementById('patron');
+  if (patron) {
+    patron.style.filter = filtro;
+    patron.className = patrones[SALIDA_ID] !== 'no' ? 'patron-' + patrones[SALIDA_ID] : '';
+  }
+}
+
+// En la salida: el patrón se apaga si el editor deja de mandarlo.
+if (SALIDA) setInterval(() => {
+  if (patrones[SALIDA_ID] !== 'no' && performance.now() - patronVisto > 3000) { patrones[SALIDA_ID] = 'no'; aplicarCorreccion(); }
+}, 1000);
 
 // La pestaña "salidas" y los botones de Presentar.
 function renderMontaje() {
@@ -1273,6 +1356,29 @@ function renderMontaje() {
     [['alta', 'alta · 2048×576'], ['normal', 'normal · 1024×288']].map(([v, t]) => `<option value="${v}" ${montaje.hydra === v ? 'selected' : ''}>${t}</option>`).join('') + '</select></label>');
   const res = document.getElementById('montaje-res');
   if (res) res.innerHTML = filas.join('');
+  const color = document.getElementById('montaje-color');
+  if (color) color.innerHTML = (dos ? ['A', 'B'] : ['A']).map(id => {
+    const c = montaje.color[id];
+    const valor = (campo) => campo === 'tono' ? Math.round(c[campo]) + '°' : c[campo].toFixed(2);
+    const rango = (campo, texto, paso) => {
+      const [lo, hi] = CORRECCION_RANGOS[campo];
+      return `<label>${texto}<input type="range" min="${lo}" max="${hi}" step="${paso}" value="${c[campo]}"
+        oninput="setCorreccion('${id}','${campo}',this.value)" onchange="saveToLocalStorage()"><output id="correccion-${campo}-${id}">${valor(campo)}</output></label>`;
+    };
+    return `<div class="section-label correccion-titulo">color${dos ? ' · ' + id : ''}</div>
+      <div class="quad-color correccion">
+        <label title="Un patrón en la salida para comparar proyectores. No se guarda: se apaga al cerrar el editor">patrón<select onchange="setPatron('${id}', this.value)">
+          ${Object.entries(PATRONES).map(([v, t]) => `<option value="${v}" ${patrones[id] === v ? 'selected' : ''}>${t}</option>`).join('')}
+        </select><span></span></label>
+        ${rango('brillo', 'brillo', 0.01)}
+        ${rango('contraste', 'contraste', 0.01)}
+        ${rango('saturacion', 'saturación', 0.01)}
+        ${rango('tono', 'tono', 1)}
+        <label title="Hacia la izquierda, más azul (fría); hacia la derecha, más roja (cálida)">temperatura<input type="range" min="-1" max="1" step="0.01" value="${c.temperatura}"
+          oninput="setCorreccion('${id}','temperatura',this.value)" onchange="saveToLocalStorage()"><output id="correccion-temperatura-${id}">${valor('temperatura')}</output></label>
+        <label><span></span><button onclick="resetCorreccion('${id}')" title="Volver a los valores neutros">↺ neutro</button><span></span></label>
+      </div>`;
+  }).join('');
   const botones = document.getElementById('presentar-botones');
   if (botones) botones.innerHTML = (dos ? ['A', 'B'] : ['A']).map(id =>
     `<button class="wide-btn" onclick="presentar('${id}')" title="Abre la salida${dos ? ' ' + id : ''} en otra ventana: llévala ${dos ? 'a su' : 'al'} proyector y dale doble clic para pantalla completa. Sigue lo que hagas aquí.">` +
@@ -1414,6 +1520,9 @@ function seguirQuads(datos) {
 function seguirEditor(m) {
   editorReproduce = !!m.reproduccion?.activa;
   if (typeof m.t0 === 'number' && isFinite(m.t0)) relojBase = m.t0;
+  if (m.correccion) montaje.color = { A: normalizarCorreccion(m.correccion.A), B: normalizarCorreccion(m.correccion.B) };
+  if (m.patron) { for (const id of ['A', 'B']) patrones[id] = m.patron[id] in PATRONES ? m.patron[id] : 'no'; patronVisto = performance.now(); }
+  aplicarCorreccion();
   if (m.escena !== scenes[currentSceneIndex]?.id) return;   // la otra escena llega por storage
   seguirQuads(m.quads || []);
   seguirArchivosLocales(m.quads || []);
@@ -1538,6 +1647,7 @@ function seguirGuardado() {
   montaje = normalizarMontaje(config.montaje);
   actualizarSalidaDOM();
   aplicarResolucionHydra();
+  aplicarCorreccion();
   const indice = Math.min(config.currentSceneIndex || 0, scenes.length - 1);
   const escena = scenes[indice];
   currentSceneIndex = indice;   // la misma escena puede cambiar de lugar si se borra otra
@@ -1654,6 +1764,7 @@ function setup() {
   window.noise = _hydraNoise; // restore after p5 overwrote it
   for (let i = 0; i < 4; i++) hydraCanvases.push(createGraphics(512, 512));
   aplicarResolucionHydra();   // con dos salidas, apaisada (ver HYDRA CON DOS SALIDAS)
+  aplicarCorreccion();        // en la salida, el color guardado de su ventana
   gridGfx = buildGridTexture();
   colorShader = createShader(COLOR_VERT, COLOR_FRAG);
 

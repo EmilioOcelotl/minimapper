@@ -153,6 +153,11 @@
         proyector y dale doble clic. Lo que ya estaba queda en el centro, sobre la costura.</p>
       <p class="montaje-nota">La resolución es la del proyector. Si la pantalla de una salida no
         coincide, su línea de arriba se pone en ámbar: la imagen se escala.</p>
+      <!-- Color por ventana y patrones de prueba (renderMontaje) -->
+      <div id="montaje-color"></div>
+      <p class="montaje-nota">Para igualar dos proyectores: pon el gris en las dos salidas y
+        mueve la que se vea distinta hasta que no se note la costura. La temperatura corrige
+        una lámpara más amarilla o más azul.</p>
     </div>
     </div>
 
@@ -173,6 +178,13 @@
   <div id="etiqueta-salida-A" class="etiqueta-salida" hidden>A</div>
   <div id="etiqueta-salida-B" class="etiqueta-salida" hidden>B</div>
   <div id="letra-salida"></div>
+  <!-- En la salida: patrón de prueba y la matriz de temperatura del filtro (aplicarCorreccion) -->
+  <div id="patron"></div>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <filter id="temperatura" color-interpolation-filters="sRGB">
+      <feColorMatrix id="temperatura-matriz" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0" />
+    </filter>
+  </svg>
 
   <!-- Fade entre escenas -->
   <div id="scene-fade"></div>
