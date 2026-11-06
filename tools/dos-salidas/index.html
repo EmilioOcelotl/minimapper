@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>dos salidas · experimento</title>
+  <style>
+    body { background: #111; color: #ddd; font: 14px monospace; margin: 24px; max-width: 980px; }
+    h1 { font-size: 18px; font-weight: normal; }
+    fieldset { border: 1px solid #333; margin: 0 0 16px; padding: 10px 14px; }
+    legend { color: #888; }
+    label { margin-right: 18px; }
+    select, button { font: inherit; background: #222; color: #eee; border: 1px solid #555; padding: 3px 8px; }
+    button { cursor: pointer; margin-right: 8px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+    td, th { border-bottom: 1px solid #2a2a2a; padding: 4px 8px; text-align: left; }
+    th { color: #888; font-weight: normal; }
+    .nota { color: #888; line-height: 1.5; }
+    .ambar { color: #ffc840; }
+    #resumen { margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Dos salidas · experimento (no es parte de minimapper)</h1>
+  <p class="nota">Mide lo que costaría un lienzo continuo en dos proyectores, antes de construirlo
+    en la app. Abre <b>A</b> y <b>B</b>, lleva cada ventana a su proyector y dale doble clic para
+    pantalla completa. Esta página se queda en la laptop. Las dos ventanas dibujan una textura de Hydra
+    partida en dos quads (mitad izquierda en A, derecha en B) y una barra blanca que cruza la costura.</p>
+
+  <fieldset>
+    <legend>montaje</legend>
+    <label>A <select id="a"><option>1920x1080</option><option>1280x800</option></select></label>
+    <label>B <select id="b"><option>1920x1080</option><option>1280x800</option></select></label>
+    <label>Hydra <select id="hydra"><option>512x512</option><option selected>1024x512</option><option>2048x512</option><option>2048x1024</option></select></label>
+  </fieldset>
+
+  <fieldset>
+    <legend>camino</legend>
+    <label><input type="radio" name="modo" value="unico" checked> render único: A dibuja todo, B recibe su imagen</label><br>
+    <label><input type="radio" name="modo" value="doble"> dos renders: cada ventana dibuja lo suyo</label><br><br>
+    <label><input type="checkbox" id="sync"> reloj de Hydra sincronizado (dos renders)</label>
+    <label><input type="checkbox" id="espejo"> A también desde el stream (render único: mismo retraso en las dos)</label>
+    <label><input type="checkbox" id="filtro"> filtro de color en las ventanas</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>código Hydra (se ejecuta en las dos ventanas)</legend>
+    <textarea id="codigo" rows="5" spellcheck="false" style="width:100%;box-sizing:border-box;background:#0b0b0b;color:#eee;border:1px solid #444;font:inherit;padding:6px"></textarea>
+    <button id="ejecutar">▶ Ejecutar</button> <span class="nota">Ctrl+Enter. Usa <code>.out()</code> u <code>.out(o0)</code>: las ventanas muestran o0. Para feedback: <code>src(o0).scale(1.01).blend(osc(20), 0.05).out()</code></span>
+    <div id="errores" class="ambar"></div>
+  </fieldset>
+
+  <button id="abrirA">Abrir A</button><button id="abrirB">Abrir B</button>
+  <button id="aplicar">Aplicar cambios</button><button id="copiar">Copiar resultados</button>
+
+  <table>
+    <thead><tr><th></th><th>dibuja</th><th>fps</th><th>stream</th><th>retraso</th><th>reloj Hydra</th><th>pantalla</th><th>región</th><th>completa</th></tr></thead>
+    <tbody id="filas"></tbody>
+  </table>
+  <div id="resumen" class="nota"></div>
+
+  <p class="nota">Qué mirar: <b>fps</b> de quien dibuja (60 es lo ideal, 30 todavía sirve); en render
+    único, <b>stream</b> en B (cuadros que llegan) y <b>retraso</b> de B respecto del reloj; en dos
+    renders, la diferencia de <b>reloj Hydra</b> entre A y B (sin sincronizar es arbitraria; con
+    sincronizar debería quedar en unos ms) y, a ojo, si las rayas saltan en la costura.
+    <b>pantalla</b> está en pixeles físicos: si no coincide con la región, la imagen se escala
+    (revisa el escalado de pantalla de Windows).</p>
+
+  <script>
+    // Instante cero común para el reloj de Hydra (ver salida.html): reciente, para que el
+    // tiempo que llega a la GPU sea chico.
+    localStorage.setItem('dos-salidas-t0', String(Date.now()))
+    const ventanas = { A: null, B: null }
+    const datos = {}
+    const $ = id => document.getElementById(id)
+    const url = id => {
+      const p = new URLSearchParams({
+        v: id, modo: document.querySelector('input[name=modo]:checked').value,
+        a: $('a').value, b: $('b').value, hydra: $('hydra').value,
+        sync: $('sync').checked ? 1 : 0, espejo: $('espejo').checked ? 1 : 0, filtro: $('filtro').checked ? 1 : 0,
+      })
+      return 'salida.html?' + p
+    }
+    // Un clic, una ventana: el navegador bloquea la segunda si un mismo clic abre dos.
+    const abrir = id => {
+      const w = ventanas[id]
+      if (w && !w.closed) { w.location.href = url(id); w.focus(); return }
+      ventanas[id] = window.open(url(id), 'dos-salidas-' + id, 'popup,width=960,height=540')
+    }
+    $('abrirA').onclick = () => abrir('A')
+    $('abrirB').onclick = () => abrir('B')
+    $('aplicar').onclick = () => { for (const id of ['A', 'B']) if (ventanas[id] && !ventanas[id].closed) ventanas[id].location.href = url(id) }
+
+    // Render único: pasarle a B el stream de A (y de nuevo si alguna se recarga).
+    setInterval(() => {
+      const A = ventanas.A, B = ventanas.B
+      try {
+        if (A && !A.closed && B && !B.closed && A.stream && B.recibir && !B.tieneStream(A.stream)) B.recibir(A.stream)
+      } catch (e) {}
+    }, 500)
+
+    const canal = new BroadcastChannel('dos-salidas')
+    canal.onmessage = e => { if (e.data.id) { datos[e.data.id] = { ...e.data, visto: Date.now() }; pintar() } }
+
+    // El código vive en localStorage: una ventana que se abre o se recarga arranca con él.
+    const CODIGO_INICIAL = 'osc(24, 0.12, 0).thresh(0.5).mult(osc(3, 0.04, 1.6)).modulate(noise(2, 0.1), 0.02).out()'
+    $('codigo').value = localStorage.getItem('dos-salidas-codigo') || CODIGO_INICIAL
+    const ejecutar = () => {
+      localStorage.setItem('dos-salidas-codigo', $('codigo').value)
+      canal.postMessage({ tipo: 'codigo', codigo: $('codigo').value })
+    }
+    $('ejecutar').onclick = ejecutar
+    $('codigo').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ejecutar() } })
+
+    function pintar () {
+      const filas = ['A', 'B'].map(id => {
+        const d = datos[id]
+        if (!d || Date.now() - d.visto > 2500) return `<tr><td>${id}</td><td colspan="8">cerrada</td></tr>`
+        const escala = d.completa && d.pantalla !== d.region ? ' class="ambar"' : ''
+        return `<tr><td>${id}</td><td>${d.dibuja ? d.canvas : '—'}</td><td>${d.fps ?? '—'}</td>
+          <td>${d.vfps ?? '—'}</td><td>${d.latencia != null ? d.latencia + ' ms' : '—'}</td>
+          <td>${d.desfaseHydra != null ? d.desfaseHydra + ' ms' : '—'}</td><td${escala}>${d.pantalla}</td>
+          <td>${d.region}</td><td>${d.completa ? 'sí' : 'no'}</td></tr>`
+      })
+      $('filas').innerHTML = filas.join('')
+      $('errores').textContent = ['A', 'B'].filter(id => datos[id]?.error).map(id => `${id}: ${datos[id].error}`).join(' · ')
+      const A = datos.A, B = datos.B
+      if (A && B && A.modo === 'doble' && B.modo === 'doble' && A.desfaseHydra != null && B.desfaseHydra != null) {
+        $('resumen').textContent = `Diferencia de reloj Hydra entre A y B: ${Math.abs(A.desfaseHydra - B.desfaseHydra)} ms`
+      } else $('resumen').textContent = ''
+    }
+    setInterval(pintar, 1000)
+
+    $('copiar').onclick = async () => {
+      const texto = JSON.stringify({ navegador: navigator.userAgent, ventanas: datos }, null, 2)
+      try { await navigator.clipboard.writeText(texto); $('copiar').textContent = 'Copiado' }
+      catch (e) { prompt('Copia esto:', texto) }
+      setTimeout(() => $('copiar').textContent = 'Copiar resultados', 1500)
+    }
+  </script>
+</body>
+</html>

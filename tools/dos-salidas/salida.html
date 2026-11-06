@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>dos salidas · ventana</title>
+  <!-- Experimento, no es parte de la app. Ver tools/dos-salidas/index.html. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.min.js"></script>
+  <script src="https://unpkg.com/hydra-synth"></script>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color: #fff; font: 13px monospace; }
+    body.completa { cursor: none; }
+    #marco { position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: hidden; }
+    #marco canvas, #marco video { position: absolute; left: 0; top: 0; }
+    #letra { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+             font-size: 30vh; color: rgba(255, 200, 64, 0.9); text-shadow: 0 0 24px #000; pointer-events: none; }
+    body.completa #letra { display: none; }
+    #info { position: fixed; left: 8px; bottom: 8px; background: rgba(0, 0, 0, 0.7); padding: 4px 8px; white-space: pre; }
+    #hc { position: absolute; left: -99999px; }
+  </style>
+</head>
+<body>
+  <div id="marco"></div>
+  <div id="letra"></div>
+  <div id="info"></div>
+  <canvas id="hc"></canvas>
+  <!-- La corrección de color por ventana: CSS más una matriz SVG para la temperatura. -->
+  <svg width="0" height="0" style="position:absolute">
+    <filter id="temperatura"><feColorMatrix type="matrix"
+      values="1.06 0 0 0 0  0 1 0 0 0  0 0 0.92 0 0  0 0 0 1 0" /></filter>
+  </svg>
+
+  <script>
+    // --- Parámetros (los pone la página de control en la URL) ---
+    const P = new URLSearchParams(location.search)
+    const YO = P.get('v') === 'B' ? 'B' : 'A'
+    const MODO = P.get('modo') === 'doble' ? 'doble' : 'unico'
+    const tam = s => { const [w, h] = (s || '').split('x').map(Number); return w && h ? { w, h } : { w: 1920, h: 1080 } }
+    const RA = tam(P.get('a')), RB = tam(P.get('b'))
+    const MUNDO = { w: RA.w + RB.w, h: Math.max(RA.h, RB.h) }
+    const REG = { A: { x: 0, y: 0, ...RA }, B: { x: RA.w, y: 0, ...RB } }   // lado a lado
+    const MIA = REG[YO]
+    const HR = tam(P.get('hydra') || '1024x512')
+    const SYNC = P.get('sync') === '1'
+    const FILTRO = P.get('filtro') === '1'
+    const ESPEJO = P.get('espejo') === '1'   // render único: A también se ve desde el stream
+    // El instante cero lo fija la página de control al abrirse, el mismo para las dos ventanas.
+    // Tiene que ser reciente: Hydra pasa el tiempo a la GPU y con millones de segundos el
+    // shader pierde precisión (noise() da valores inválidos y la textura sale negra).
+    const T0 = Number(localStorage.getItem('dos-salidas-t0')) || Date.now()
+    const reloj = () => (Date.now() - T0) / 1000
+
+    // En 'unico' sólo A dibuja (el mundo entero) y B recibe su imagen; en 'doble', cada una lo suyo.
+    const DIBUJA = MODO === 'doble' || YO === 'A'
+    const CANVAS = MODO === 'unico' ? MUNDO : MIA          // lo que mide el canvas que se dibuja
+    const ORIGEN = MODO === 'unico' ? { x: 0, y: 0 } : MIA  // qué esquina del mundo cae en (0,0)
+
+    const marco = document.getElementById('marco')
+    const info = document.getElementById('info')
+    document.getElementById('letra').textContent = YO
+    document.title = 'salida ' + YO
+    if (FILTRO) marco.style.filter = 'brightness(1.04) contrast(1.06) saturate(1.1) hue-rotate(4deg) url(#temperatura)'
+
+    // El marco mide la región de esta ventana en pixeles del mundo y se escala para caber.
+    function encajar () {
+      const s = Math.min(innerWidth / MIA.w, innerHeight / MIA.h)
+      marco.style.width = MIA.w + 'px'
+      marco.style.height = MIA.h + 'px'
+      marco.style.transform = `translate(${(innerWidth - MIA.w * s) / 2}px, ${(innerHeight - MIA.h * s) / 2}px) scale(${s})`
+    }
+    addEventListener('resize', encajar)
+    addEventListener('dblclick', () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen())
+    document.addEventListener('fullscreenchange', () => document.body.classList.toggle('completa', !!document.fullscreenElement))
+
+    // --- Hydra: rayas verticales que corren a lo ancho, para ver la costura ---
+    const CODIGO_INICIAL = 'osc(24, 0.12, 0).thresh(0.5).mult(osc(3, 0.04, 1.6)).modulate(noise(2, 0.1), 0.02).out()'
+    let errorHydra = ''
+    function ejecutar (codigo) {
+      try { eval(codigo); errorHydra = '' } catch (e) { errorHydra = e.message }
+    }
+    let hydra = null
+    const hc = document.getElementById('hc')
+    if (DIBUJA) {
+      hc.width = HR.w; hc.height = HR.h
+      hydra = new Hydra({ canvas: hc, width: HR.w, height: HR.h, detectAudio: false, makeGlobal: true })
+      window._hydraNoise = window.noise   // p5 la pisa al arrancar; se restaura en setup()
+      // El código lo pone la página de control (localStorage al abrir, el canal al ejecutar).
+      ejecutar(localStorage.getItem('dos-salidas-codigo') || CODIGO_INICIAL)
+    }
+
+    // --- Medición: código de tiempo en una tira de 24 bloques ---
+    const BLOQUE = 10, BITS = 24
+    const tiraEn = r => ({ x: r.x + 20, y: r.y + 20 })
+    const ahora24 = () => Date.now() & 0xFFFFFF
+    let cuadros = 0, rafs = 0, vcuadros = 0, latencias = []
+
+    // Lee la tira de la región de esta ventana en un <video> que trae el stream del mundo.
+    function medirVideo (video) {
+      const lector = document.createElement('canvas')
+      lector.width = BITS * BLOQUE; lector.height = BLOQUE
+      const ctx = lector.getContext('2d', { willReadFrequently: true })
+      const cuadro = () => {
+        vcuadros++
+        const t = tiraEn(MIA)
+        try {
+          ctx.drawImage(video, t.x, t.y, BITS * BLOQUE, BLOQUE, 0, 0, BITS * BLOQUE, BLOQUE)
+          const d = ctx.getImageData(0, 0, BITS * BLOQUE, BLOQUE).data
+          let codigo = 0
+          for (let i = 0; i < BITS; i++) if (d[((BLOQUE >> 1) * BITS * BLOQUE + i * BLOQUE + (BLOQUE >> 1)) * 4] > 128) codigo |= 1 << i
+          const lat = (ahora24() - codigo + 0x1000000) & 0xFFFFFF
+          if (lat < 2000) latencias.push(lat)
+        } catch (e) {}
+        video.requestVideoFrameCallback(cuadro)
+      }
+      video.requestVideoFrameCallback(cuadro)
+    }
+
+    function videoDelMundo () {
+      const v = document.createElement('video')
+      v.muted = true; v.playsInline = true; v.autoplay = true
+      v.style.width = MUNDO.w + 'px'; v.style.height = MUNDO.h + 'px'
+      v.style.left = (-MIA.x) + 'px'; v.style.top = (-MIA.y) + 'px'
+      marco.appendChild(v)
+      medirVideo(v)
+      return v
+    }
+
+    // B en render único: la página de control le pasa el stream de A.
+    let video = null
+    window.recibir = s => {
+      if (!video) video = videoDelMundo()
+      if (video.srcObject !== s) { video.srcObject = s; video.play().catch(() => {}) }
+    }
+    window.tieneStream = s => !!video && video.srcObject === s
+
+    // --- p5 ---
+    let proxy = null
+    function setup () {
+      if (window._hydraNoise) window.noise = window._hydraNoise   // como en la app
+      pixelDensity(1)
+      if (!DIBUJA) { noCanvas(); encajar(); return }
+      const c = createCanvas(CANVAS.w, CANVAS.h, WEBGL)
+      c.parent(marco)
+      proxy = createGraphics(HR.w, HR.h)
+      proxy.pixelDensity(1)
+      if (MODO === 'unico') {
+        window.stream = c.elt.captureStream(60)
+        if (ESPEJO) { c.elt.style.opacity = 0; window.recibir(window.stream) }
+      }
+      encajar()
+    }
+
+    function draw () {
+      if (!DIBUJA) return
+      cuadros++
+      if (SYNC) hydra.synth.time = reloj()
+      hydra.renderFbo({ tex0: hydra.o[0].getCurrent(), resolution: [HR.w, HR.h] })
+      proxy.drawingContext.drawImage(hc, 0, 0, HR.w, HR.h)
+
+      background(0)
+      translate(-width / 2 - ORIGEN.x, -height / 2 - ORIGEN.y)   // de aquí en adelante, pixeles del mundo
+      noStroke()
+      textureMode(NORMAL)
+      // Un quad por proyector, cada uno con su mitad de la textura: el recorte por quad.
+      for (const id of ['A', 'B']) {
+        const r = REG[id], u0 = id === 'A' ? 0 : 0.5, u1 = u0 + 0.5
+        texture(proxy)
+        beginShape()
+        vertex(r.x, r.y, 0, u0, 0); vertex(r.x + r.w, r.y, 0, u1, 0)
+        vertex(r.x + r.w, r.y + r.h, 0, u1, 1); vertex(r.x, r.y + r.h, 0, u0, 1)
+        endShape(CLOSE)
+      }
+      // Barra blanca con el reloj compartido: en 'doble' cruza la costura sin salto si el
+      // reloj de las dos ventanas es el mismo. Las rayas de Hydra muestran el desfase de Hydra.
+      fill(255)
+      rect((reloj() * 500) % MUNDO.w, 0, 8, MUNDO.h)
+      // Tira de tiempo en cada región (para medir el retraso del stream)
+      const codigo = ahora24()
+      for (const id of ['A', 'B']) {
+        const t = tiraEn(REG[id])
+        fill(0); rect(t.x - 4, t.y - 4, BITS * BLOQUE + 8, BLOQUE + 8)
+        for (let i = 0; i < BITS; i++) { fill(codigo >> i & 1 ? 255 : 0); rect(t.x + i * BLOQUE, t.y, BLOQUE, BLOQUE) }
+      }
+    }
+
+    const contarRaf = () => { rafs++; requestAnimationFrame(contarRaf) }
+    requestAnimationFrame(contarRaf)
+
+    // --- Reporte, una vez por segundo ---
+    const canal = new BroadcastChannel('dos-salidas')
+    canal.onmessage = e => { if (e.data && e.data.tipo === 'codigo' && hydra) ejecutar(e.data.codigo) }
+    setInterval(() => {
+      const dpr = devicePixelRatio || 1
+      const lat = latencias.length ? latencias.reduce((a, b) => a + b, 0) / latencias.length : null
+      const m = {
+        id: YO, modo: MODO, dibuja: DIBUJA,
+        fps: DIBUJA ? cuadros : null, raf: rafs, vfps: video ? vcuadros : null,
+        latencia: lat != null ? Math.round(lat) : null,
+        desfaseHydra: hydra ? Math.round((hydra.synth.time - reloj()) * 1000) : null,
+        region: `${MIA.w}×${MIA.h}`, canvas: DIBUJA ? `${CANVAS.w}×${CANVAS.h}` : '—', hydra: `${HR.w}×${HR.h}`,
+        pantalla: `${Math.round(screen.width * dpr)}×${Math.round(screen.height * dpr)}`, dpr,
+        completa: !!document.fullscreenElement, sync: SYNC, filtro: FILTRO, espejo: ESPEJO,
+        error: errorHydra || undefined,
+      }
+      canal.postMessage(m)
+      info.textContent = `${YO} · ${MODO}${SYNC ? ' · reloj sincronizado' : ''}${FILTRO ? ' · filtro' : ''}\n` +
+        (DIBUJA ? `dibuja ${m.canvas} a ${m.fps} fps · hydra ${m.hydra}\n` : '') +
+        (video ? `stream ${m.vfps} cuadros/s · retraso ${m.latencia ?? '?'} ms\n` : '') +
+        `pantalla ${m.pantalla} (dpr ${dpr}) · región ${m.region}${m.completa ? '' : ' · doble clic: pantalla completa'}`
+      cuadros = 0; rafs = 0; vcuadros = 0; latencias = []
+    }, 1000)
+  </script>
+</body>
+</html>
