@@ -42,6 +42,25 @@ function togglePanelCollapse() {
   btn.textContent = ui.classList.contains('collapsed') ? '›' : '‹';
 }
 
+// Pestañas del panel. Presentar (arriba) y la sesión (abajo) quedan fuera de ellas: se usan
+// desde cualquier pestaña. La pestaña abierta se recuerda entre recargas.
+const PESTANAS = ['mapear', 'interaccion'];
+let pestanaActiva = 'mapear';
+
+function mostrarPestana(nombre) {
+  if (!PESTANAS.includes(nombre)) nombre = 'mapear';
+  pestanaActiva = nombre;
+  document.querySelectorAll('#pestanas [data-pestana]').forEach(b => b.setAttribute('aria-selected', b.dataset.pestana === nombre));
+  document.querySelectorAll('.pestana').forEach(p => p.classList.toggle('activa', p.dataset.pestana === nombre));
+  try { localStorage.setItem('minimapper_pestana', nombre); } catch (e) {}
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  let guardada = null;
+  try { guardada = localStorage.getItem('minimapper_pestana'); } catch (e) {}
+  mostrarPestana(guardada || 'mapear');
+});
+
 // Modal de bienvenida / ayuda. En la primera visita se muestra solo (marca en
 // localStorage); al cerrarlo se revela el entorno de trabajo. Después, el
 // botón ? lo reabre sin cambiar de modo.
@@ -813,6 +832,11 @@ const interaccion = {
   camara: false, lector: null, video: null, cuadroUltimo: 0,
 };
 
+// El punto verde en la pestaña: hay una fuente encendida aunque se esté en otra pestaña.
+function marcarPestanaInteraccion() {
+  document.querySelector('#pestanas [data-pestana="interaccion"]')?.classList.toggle('encendida', interaccion.mouse || interaccion.camara);
+}
+
 function publicarLecturas(lecturas) {
   recibirLecturas(lecturas);
   canalSensor?.postMessage({ lecturas });   // el objeto que publica no se oye a sí mismo
@@ -834,6 +858,7 @@ function toggleMouseSensor() {
   document.getElementById('sensor-xy').hidden = !interaccion.mouse;
   if (!interaccion.mouse) publicarLecturas({ x: 0, y: 0 });
   pintarXY();
+  marcarPestanaInteraccion();
 }
 
 function pintarXY() {
@@ -896,6 +921,7 @@ async function toggleCamaraSensor() {
     interaccion.camara = true;
     btn.classList.add('active');
     document.getElementById('sensor-camara').hidden = false;
+    marcarPestanaInteraccion();
     avisarCamara('');
     cuadroCamara(video);
   } catch (e) {
@@ -918,6 +944,7 @@ function detenerCamaraSensor() {
   const caja = document.getElementById('sensor-camara');
   if (caja) caja.hidden = true;
   if (estaba) publicarLecturas({ cercania: 0, cerca: 0 });
+  marcarPestanaInteraccion();
 }
 
 // Bucle propio, no en draw(): un cuadro de cámara a la vez, a no más de INTERACCION_HZ.
@@ -932,7 +959,7 @@ function cuadroCamara(video) {
   interaccion.cuadroUltimo = ahora;
   interaccion.lector.leer(video, ahora);
   const ui = document.getElementById('ui');
-  if (uiVisible && !ui.classList.contains('collapsed')) pintarVistaCamara(video, interaccion.lector);
+  if (uiVisible && !ui.classList.contains('collapsed') && pestanaActiva === 'interaccion') pintarVistaCamara(video, interaccion.lector);
   otra();
 }
 

@@ -1039,6 +1039,53 @@ select option {
   color: rgb(150, 255, 200);
 }
 
+/* --- Pestañas del panel (mostrarPestana) --- */
+#pestanas {
+  display: flex;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+#pestanas button {
+  flex: 1;
+  margin: 0;
+  padding: 7px 4px 6px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+}
+
+#pestanas button:hover {
+  background: none;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+#pestanas button[aria-selected="true"] {
+  color: #fff;
+  border-bottom-color: rgba(255, 255, 255, 0.8);
+}
+
+/* Una fuente de interacción encendida se avisa desde cualquier pestaña. */
+#pestanas button.encendida::after {
+  content: ' ●';
+  color: rgb(90, 230, 150);
+}
+
+.pestana {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.pestana.activa { display: flex; }
+
+.pestana[data-pestana="interaccion"] { overflow-y: auto; }
+
 /* --- Interacción: mouse y cámara como lecturas, en el panel --- */
 #sensor-xy {
   position: relative;

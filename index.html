@@ -83,6 +83,14 @@
       <div id="salida-estado">salida cerrada</div>
     </div>
 
+    <!-- Pestañas: Presentar queda arriba y la sesión abajo, fuera de ellas (ver mostrarPestana). -->
+    <div id="pestanas" role="tablist">
+      <button role="tab" data-pestana="mapear" onclick="mostrarPestana('mapear')">mapear</button>
+      <button role="tab" data-pestana="interaccion" onclick="mostrarPestana('interaccion')"
+        title="Mouse y cámara como lecturas para las superficies y para Hydra">interacción</button>
+    </div>
+
+    <div class="pestana" data-pestana="mapear" role="tabpanel">
     <div class="panel-section superficies">
       <div class="section-label">superficies</div>
       <div class="section-actions">
@@ -90,24 +98,6 @@
         <button id="add-freeform-btn" onclick="startDrawingFreeform()">+ Libre</button>
       </div>
       <div id="quad-list"></div>
-    </div>
-
-    <div class="panel-section interaccion">
-      <div class="section-label">interacción</div>
-      <div class="section-actions">
-        <button id="sensor-mouse-btn" onclick="toggleMouseSensor()"
-          title="Un recuadro: arrastra dentro y publica x e y, de 0 a 1. Elígelas como señal de un quad o léelas en Hydra con sensor.x">mouse</button>
-        <button id="sensor-camara-btn" onclick="toggleCamaraSensor()"
-          title="Detecta la cara más grande y publica cercania y cerca. Nada se graba ni sale de esta computadora">cámara</button>
-      </div>
-      <div id="sensor-xy" hidden><i></i></div>
-      <div id="sensor-camara" hidden>
-        <canvas id="sensor-vista" width="160" height="120" aria-label="Lo que ve la cámara"></canvas>
-        <label class="mic-sensitivity"><span class="sensitivity-label">umbral</span>
-          <input id="sensor-umbral" type="range" min="0.05" max="0.95" step="0.01" value="0.45"></label>
-      </div>
-      <div id="sensor-nota"></div>
-      <div id="senal-estado" title="Las lecturas que llegan: elígelas como señal de un quad o léelas en Hydra con sensor.nombre">señal · enciende el mouse o la cámara</div>
     </div>
 
     <div class="panel-section">
@@ -124,7 +114,28 @@
       </button>
     </div>
 
-<div class="panel-section session-section">
+    </div>
+
+    <div class="pestana" data-pestana="interaccion" role="tabpanel">
+    <div class="panel-section interaccion">
+      <div class="section-actions">
+        <button id="sensor-mouse-btn" onclick="toggleMouseSensor()"
+          title="Un recuadro: arrastra dentro y publica x e y, de 0 a 1. Elígelas como señal de un quad o léelas en Hydra con sensor.x">mouse</button>
+        <button id="sensor-camara-btn" onclick="toggleCamaraSensor()"
+          title="Detecta la cara más grande y publica cercania y cerca. Nada se graba ni sale de esta computadora">cámara</button>
+      </div>
+      <div id="sensor-xy" hidden><i></i></div>
+      <div id="sensor-camara" hidden>
+        <canvas id="sensor-vista" width="160" height="120" aria-label="Lo que ve la cámara"></canvas>
+        <label class="mic-sensitivity"><span class="sensitivity-label">umbral</span>
+          <input id="sensor-umbral" type="range" min="0.05" max="0.95" step="0.01" value="0.45"></label>
+      </div>
+      <div id="sensor-nota"></div>
+      <div id="senal-estado" title="Las lecturas que llegan: elígelas como señal de un quad o léelas en Hydra con sensor.nombre">señal · enciende el mouse o la cámara</div>
+    </div>
+    </div>
+
+    <div class="panel-section session-section">
       <button class="wide-btn" onclick="saveSession()"
         title="Descarga un archivo .json con todas las escenas, superficies y código">
         <span class="wide-icon">↓</span>Guardar sesión
