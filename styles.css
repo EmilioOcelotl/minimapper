@@ -1084,30 +1084,28 @@ select option {
 #sensor-xy[hidden],
 #sensor-camara[hidden] { display: none; }
 
-/* --- Estado de control/ (lecturas por BroadcastChannel) y de la salida --- */
-#control-estado,
+/* --- Estado de las lecturas y de la salida --- */
+#senal-estado,
 #salida-estado {
   display: block;
   margin-top: 8px;
   font-family: monospace;
   font-size: 10px;
   color: rgba(255, 255, 255, 0.3);
-  text-decoration: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-#control-estado::before,
+#senal-estado::before,
 #salida-estado::before {
   content: '●';
   margin-right: 6px;
   color: rgba(255, 255, 255, 0.2);
 }
 
-#control-estado.vivo { color: rgba(255, 255, 255, 0.7); }
-#control-estado.vivo::before { color: rgb(90, 230, 150); }
-#control-estado:hover { color: rgba(255, 255, 255, 0.85); }
+#senal-estado.vivo { color: rgba(255, 255, 255, 0.7); }
+#senal-estado.vivo::before { color: rgb(90, 230, 150); }
 #salida-estado.vivo { color: rgba(255, 255, 255, 0.7); }
 #salida-estado.vivo::before { color: rgb(90, 230, 150); }
 

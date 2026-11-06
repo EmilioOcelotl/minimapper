@@ -5,11 +5,9 @@ let showHint = true;
 
 // index.html?salida es la ventana que va al proyector: sólo el resultado. Nunca
 // entra a edición, no muestra ✦, hint, ayuda, HUD ni cursor, ignora el teclado y
-// no escribe en localStorage, para no pisar lo que se edita en otra ventana. Con un
-// editor abierto lo sigue (ver "PRESENTAR"). Sin editor, empieza a guardar cuando
-// control/ le manda el primer color: desde ahí es la dueña del estado.
+// no escribe nunca en localStorage: el dueño del estado es el editor, y la salida lo
+// sigue (ver "PRESENTAR"). Sin editor, se queda con lo guardado al cargar.
 const SALIDA = new URLSearchParams(location.search).has('salida');
-let salidaGuarda = false;
 
 function toggleEditMode() {
   if (SALIDA) return;
@@ -325,8 +323,8 @@ function serializableQuads(quadsData) {
 }
 
 function saveToLocalStorage() {
-  publicarEstado();   // un color movido en el panel también le llega a control/
-  if (SALIDA && (!salidaGuarda || editorVivo())) return;
+  publicarEstado();   // un color movido en el panel también le llega a la salida
+  if (SALIDA) return;
   try {
     snapshotCurrentScene();
     const config = {
@@ -697,10 +695,10 @@ function setQuadColor(index, campo, valor) {
   c[campo] = campo === 'tinte' ? valor : parseFloat(valor);
   const out = document.getElementById(`color-${campo}-${index}`);
   if (out && campo !== 'tinte') out.textContent = c[campo].toFixed(2);
-  publicarEstado();   // la salida y control/ siguen el deslizador, no sólo al soltarlo
+  publicarEstado();   // la salida sigue el deslizador, no sólo al soltarlo
 }
 
-// Conectar el nivel a una lectura de control/ ('' = manual). Con señal, el deslizador
+// Conectar el nivel a una lectura ('' = manual). Con señal, el deslizador
 // de nivel es el máximo y la lectura decide cuánto de ese máximo sale.
 function setQuadSenal(index, senal) {
   pushUndo();
@@ -726,22 +724,23 @@ function toggleQuadInvertir(index) {
   saveToLocalStorage();
 }
 
-// --- CONTROL: LECTURAS DESDE OTRA VENTANA ---
-// control/ lee la cámara y publica números de 0 a 1 por un BroadcastChannel. Sólo
-// conecta entre páginas del mismo origen: la versión en línea, o un servidor local
-// en la carpeta del repo (no file://). Aquí se guardan en el global `sensor`, que
-// Hydra puede leer: osc(10, 0.1, () => sensor.cercania * 2).out(o0)
+// --- LECTURAS ---
+// Números de 0 a 1 que se guardan en el global `sensor`, que Hydra puede leer:
+// osc(10, 0.1, () => sensor.cercania * 2).out(o0). Los produce la sección "interacción"
+// del panel (ver INTERACCIÓN) y viajan a la salida por un BroadcastChannel, que sólo
+// conecta páginas del mismo origen: la versión en línea, o un servidor local en la carpeta
+// del repo (no file://).
 
-// Arranca con las lecturas de control/ en 0: así un sketch con () => sensor.cercania
-// funciona aunque control no esté abierto, y la lista no se redibuja al llegar la primera.
+// Arranca con todas en 0: así un sketch con () => sensor.cercania funciona aunque no haya
+// nada encendido, y la lista no se redibuja al llegar la primera.
 // `x` e `y` las publica el recuadro de la sección "interacción" (ver INTERACCIÓN, abajo).
 var sensor = { cercania: 0, cerca: 0, x: 0, y: 0 };
 let sensorUltimo = 0;
-const SENSOR_CANAL = 'minimapper-control';
+const SENSOR_CANAL = 'minimapper-lecturas';
 let canalSensor = null;
 
-// Un solo receptor: lo alimentan el canal (control/, o el editor si esta es la salida)
-// y la sección "interacción" de este mismo panel.
+// Un solo receptor: lo alimentan la sección "interacción" de este panel y, en la salida,
+// el canal que trae las del editor.
 function recibirLecturas(lecturas) {
   if (!lecturas) return;
   let nuevas = false;
@@ -760,7 +759,7 @@ try {
   canalSensor = new BroadcastChannel(SENSOR_CANAL);
   canalSensor.onmessage = (e) => recibirLecturas(e.data && e.data.lecturas);
 } catch (e) {
-  console.warn('BroadcastChannel no disponible: control/ no puede conectarse.', e);
+  console.warn('BroadcastChannel no disponible: la salida no recibe lecturas.', e);
 }
 
 function sensorVivo() {
@@ -787,7 +786,7 @@ function colorEfectivo(c) {
 }
 
 setInterval(() => {
-  const el = document.getElementById('control-estado');
+  const el = document.getElementById('senal-estado');
   if (!el) return;
   const claves = Object.keys(sensor);
   const vivo = sensorVivo();
@@ -802,13 +801,11 @@ setInterval(() => {
 }, 200);
 
 // --- INTERACCIÓN: LECTURAS HECHAS EN ESTE PANEL ---
-// Paso 3 de "Control desde el modo edición": lo que hacía control/ en otra ventana, aquí.
 // Dos fuentes, cada una con su botón: el mouse sobre un recuadro (`x`, `y`) y la cámara
-// con el detector de caras de control/ (`cercania`, `cerca`). Las dos entran por el mismo
-// recibirLecturas() que el canal y salen por el canal hacia la salida, que las aplica
-// igual que si vinieran de control/. Nada de esto corre si no se enciende: el detector se
+// con un detector de caras (`cercania`, `cerca`, ver interaccion.js). Las dos entran por
+// recibirLecturas() y salen por el canal hacia la salida, que las aplica igual. Nada de esto corre si no se enciende: el detector se
 // baja con import() al encender la cámara, y en presentación la miniatura no se dibuja.
-// Al apagar una fuente sus lecturas bajan a 0, como cuando control/ se calla.
+// Al apagar una fuente sus lecturas bajan a 0.
 
 const INTERACCION_HZ = 20;
 const interaccion = {
@@ -875,7 +872,7 @@ function avisarCamara(texto, error = false) {
 }
 
 // Una cámara propia a 640×480, fuera del DOM, aunque un quad ya use la suya: pedirla dos
-// veces funciona en Chrome y Firefox. Delegate CPU (ver control/detector.js).
+// veces funciona en Chrome y Firefox. Delegate CPU (ver interaccion.js).
 async function toggleCamaraSensor() {
   if (interaccion.camara) return detenerCamaraSensor();
   const btn = document.getElementById('sensor-camara-btn');
@@ -883,7 +880,7 @@ async function toggleCamaraSensor() {
   try {
     if (!interaccion.lector) {
       avisarCamara('cargando el detector… la primera vez tarda unos segundos');
-      const { crearLector } = await import('./control/detector.js');
+      const { crearLector } = await import('./interaccion.js');
       interaccion.lector = crearLector({ delegados: ['CPU'] });
       interaccion.lector.umbral = parseFloat(document.getElementById('sensor-umbral').value);
     }
@@ -958,48 +955,31 @@ function pintarVistaCamara(video, lector) {
   ctx.restore();
 }
 
-// --- CONTROL: EDICIÓN DESDE OTRA VENTANA ---
-// Un canal aparte de las lecturas, que tienen el contrato fijo. minimapper publica qué
-// quads hay y su color; control/ los muestra y manda cambios. La dueña del estado es
-// esta ventana: control no guarda nada, y cerrarlo no pierde nada. Ver control/NOTAS.md.
-//   control → { tipo: 'pedir' }                      (al abrir y cada 2 s)
-//   aquí    → { tipo: 'estado', ventana, salida, escena, numero, lienzo: { w, h },
-//               quads: [{ i, nombre, kind, fuente, puntos: [{ x, y }], color }] }
-//   control → { tipo: 'color', escena, i, cambios: { nivel: 0.8 }, inicio }
-//   control → { tipo: 'vertices', escena, i, k, puntos: [{ x, y }], inicio }   (todos los del quad)
-//   control → { tipo: 'deshacer', escena }
-//   control → { tipo: 'escena', id }  ·  { tipo: 'duracion', id, segundos }
-//   control → { tipo: 'reproducir', modo }  ·  { tipo: 'detener' }
-//   aquí    → { tipo: 'aplicado', ventana, escena, valores: { i: 0..1 } }   (cada 200 ms, con señal)
-//   salida  → { tipo: 'pedir', ventana, lienzo: { w, h } }   (cada segundo; ver "PRESENTAR")
-// `estado` lleva también `marca` (el punto que se arrastra, para la salida) y `sigue`
-// (es una salida que sigue a un editor: control/ no la cuenta como otra dueña).
-// `ventana` es un id por pestaña: si control oye a dos, avisa. Los puntos van en las
-// coordenadas de siempre (centradas, en pixeles de esta ventana); `lienzo` le dice a
-// control a qué escala dibujarlos. `k` es el punto que se arrastra (-1 = la superficie
-// entera): sólo sirve para marcarlo en la proyección.
-
+// --- EDITOR → SALIDA: EL CANAL ---
+// Un canal aparte de las lecturas. El editor publica lo vivo de la escena montada y la
+// salida lo aplica (ver "PRESENTAR"):
+//   salida → { tipo: 'pedir', ventana, lienzo: { w, h } }   (cada segundo)
+//   editor → { tipo: 'estado', ventana, salida, escena, reproduccion, marca,
+//              quads: [{ i, kind, fuente, puntos: [{ x, y }], local, color }] }
+// Los puntos van en las coordenadas de siempre (centradas, en pixeles de la salida).
+// `marca` es el punto que se arrastra (k = -1: la superficie entera, con M); `local`, el
+// blob: de un archivo local. `ventana` es un id por pestaña.
 const EDICION_CANAL = 'minimapper-edicion';
 const VENTANA_ID = Math.random().toString(36).slice(2, 10);
 let canalEdicion = null;
 let estadoPendiente = false;
-let guardarRemoto = null;
-let guardarVertices = null;
 
-function estadoParaControl() {
+function estadoParaSalida() {
   return {
     tipo: 'estado', ventana: VENTANA_ID, salida: SALIDA,
-    escena: scenes[currentSceneIndex]?.id, numero: currentSceneIndex + 1,
-    escenas: scenes.map(s => ({ id: s.id, duracion: s.duration_s })),
+    escena: scenes[currentSceneIndex]?.id,
     reproduccion: { activa: isPlaying, modo: playbackMode },
-    sigue: editorVivo(),
     marca: marcaParaSalida(),
-    lienzo: lienzoComposicion(),
     quads: quads.map((q, i) => {
       const c = quadColor(q);
       const libre = q.kind === 'freeform';
       return {
-        i, nombre: `${libre ? 'Libre' : 'Quad'} ${i}`, kind: libre ? 'freeform' : 'quad', fuente: q.sourceType,
+        i, kind: libre ? 'freeform' : 'quad', fuente: q.sourceType,
         puntos: (libre ? q.vertices : q.points).map(p => ({ x: p.x, y: p.y })),
         // Un archivo local del editor: la salida puede abrir su blob: mientras el editor viva.
         local: !SALIDA && q.sourceUrl && q.sourceUrl.startsWith('blob:') ? q.sourceUrl : undefined,
@@ -1011,83 +991,14 @@ function estadoParaControl() {
 }
 
 // Se junta en un solo mensaje lo que cambie en el mismo instante (renderQuadList se
-// llama varias veces seguidas al montar una escena).
+// llama varias veces seguidas al montar una escena). Sólo el editor publica.
 function publicarEstado() {
-  if (!canalEdicion || estadoPendiente) return;
+  if (SALIDA || !canalEdicion || estadoPendiente) return;
   estadoPendiente = true;
   setTimeout(() => {
     estadoPendiente = false;
-    canalEdicion.postMessage(estadoParaControl());
+    canalEdicion.postMessage(estadoParaSalida());
   }, 50);
-}
-
-// Mismas reglas que el panel: rangos de los deslizadores, sólo nombres simples de lectura.
-// Un mensaje para otra escena o un quad que ya no existe se descarta, y el estado que se
-// publica en respuesta corrige a control.
-function aplicarColorRemoto(m) {
-  const quad = quads[m.i];
-  if (m.escena !== scenes[currentSceneIndex]?.id || !quad || !m.cambios) { publicarEstado(); return; }
-  const ch = m.cambios;
-  const c = quadColor(quad);
-  const num = (v, max) => (typeof v === 'number' && isFinite(v)) ? Math.min(max, Math.max(0, v)) : null;
-  if (m.inicio) pushUndo();
-  let estructura = false;
-  if ('nivel' in ch && num(ch.nivel, 1.5) != null) setQuadColor(m.i, 'nivel', num(ch.nivel, 1.5));
-  if ('saturacion' in ch && num(ch.saturacion, 2) != null) setQuadColor(m.i, 'saturacion', num(ch.saturacion, 2));
-  if ('tinte' in ch && /^#[0-9a-f]{6}$/i.test(ch.tinte)) setQuadColor(m.i, 'tinte', ch.tinte);
-  if ('senal' in ch && (ch.senal === '' || /^[a-z_][a-z0-9_]*$/i.test(ch.senal))) {
-    c.senal = ch.senal;
-    if (c.senal && c.invertir == null) c.invertir = false;
-    estructura = true;
-  }
-  if ('destino' in ch && ['nivel', 'saturacion', 'tinte'].includes(ch.destino)) { c.destino = ch.destino; estructura = true; }
-  if ('invertir' in ch && typeof ch.invertir === 'boolean') { c.invertir = ch.invertir; estructura = true; }
-  salidaGuarda = true;
-  // Guardar y redibujar el panel al soltar, no en cada paso del arrastre.
-  clearTimeout(guardarRemoto);
-  guardarRemoto = setTimeout(() => { saveToLocalStorage(); renderQuadList(); }, estructura ? 0 : 300);
-}
-
-// control manda todos los puntos del quad, no un delta: arrastrar un vértice y mover la
-// superficie entera (M) son el mismo mensaje. Se descarta si no coincide el número de
-// puntos —el quad cambió de forma mientras tanto— o si algún punto se fue muy lejos.
-function aplicarVerticesRemoto(m) {
-  const quad = quads[m.i];
-  if (m.escena !== scenes[currentSceneIndex]?.id || !quad || !Array.isArray(m.puntos)) { publicarEstado(); return; }
-  const libre = quad.kind === 'freeform';
-  const pts = libre ? quad.vertices : quad.points;
-  const lejos = 4 * Math.max(width, height);
-  const valido = v => typeof v === 'number' && isFinite(v) && Math.abs(v) < lejos;
-  if (m.puntos.length !== pts.length || !m.puntos.every(p => p && valido(p.x) && valido(p.y))) { publicarEstado(); return; }
-  if (m.inicio) pushUndo();
-  m.puntos.forEach((p, k) => { pts[k].x = p.x; pts[k].y = p.y; });
-  if (!libre) buildTessCache(quad);
-  marcaRemota = { i: m.i, k: Number.isInteger(m.k) ? m.k : -1, visto: performance.now() };
-  salidaGuarda = true;
-  clearTimeout(guardarVertices);
-  guardarVertices = setTimeout(() => { saveToLocalStorage(); updateCurrentSceneThumbnail(); }, 300);
-}
-
-// Escenas y reproducción, con las mismas funciones que el strip del panel. Las escenas
-// se nombran por id: el índice cambia si se borra una en otra ventana. Cambiar de escena
-// o reproducir no hace que ?salida empiece a guardar —es tocar, no editar—; la duración sí.
-function aplicarEscenaRemota(m) {
-  const indice = scenes.findIndex(s => s.id === m.id);
-  if (m.tipo === 'escena' && indice !== -1) {
-    if (isPlaying) stopPlayback();
-    switchScene(indice);
-  } else if (m.tipo === 'duracion' && indice !== -1 && typeof m.segundos === 'number' && isFinite(m.segundos)) {
-    scenes[indice].duration_s = Math.min(9999, Math.max(1, Math.round(m.segundos)));
-    salidaGuarda = true;
-    saveToLocalStorage();
-    renderSceneStrip();
-  } else if (m.tipo === 'reproducir' && ['once', 'loop', 'random'].includes(m.modo)) {
-    playbackMode = m.modo;
-    startPlayback();
-  } else if (m.tipo === 'detener') {
-    if (isPlaying) stopPlayback();
-  }
-  publicarEstado();
 }
 
 try {
@@ -1097,31 +1008,14 @@ try {
     if (!m) return;
     if (m.tipo === 'estado') { if (SALIDA && !m.salida) seguirEditor(m); return; }
     if (m.tipo === 'pedir') { notarSalida(m); publicarEstado(); entregarFuentes(); return; }
-    // Con un editor abierto, lo que mande control/ lo aplica el editor y esta ventana lo sigue.
-    if (editorVivo()) return;
-    if (m.tipo === 'color') aplicarColorRemoto(m);
-    else if (m.tipo === 'vertices') aplicarVerticesRemoto(m);
-    else if (m.tipo === 'deshacer' && m.escena === scenes[currentSceneIndex]?.id) { salidaGuarda = true; undo(); }
-    else if (['escena', 'duracion', 'reproducir', 'detener'].includes(m.tipo)) aplicarEscenaRemota(m);
   };
 } catch (e) {
   canalEdicion = null;
 }
 
-// El valor que sale de cada quad con señal (lo que el panel muestra en `color-rampa`).
-// Va aparte del estado para no redibujar el mapa de control cinco veces por segundo.
-setInterval(() => {
-  if (!canalEdicion) return;
-  const valores = {};
-  quads.forEach((q, i) => { if (q.color && q.color.senal) valores[i] = q.color.rampa ?? 0; });
-  if (Object.keys(valores).length) {
-    canalEdicion.postMessage({ tipo: 'aplicado', ventana: VENTANA_ID, escena: scenes[currentSceneIndex]?.id, valores });
-  }
-}, 200);
-
-// Mientras control arrastra, la proyección marca el punto tomado (o los de la superficie
+// Mientras el editor arrastra, la salida marca el punto tomado (o los de la superficie
 // entera, con M): con video encima no se ve dónde cae una esquina en el muro. Se va sola
-// un segundo después del último mensaje. En modo edición no hace falta: los puntos ya se ven.
+// un segundo después del último mensaje. Sólo en la salida, que nunca entra a edición.
 let marcaRemota = null;
 const MARCA_DURA = 1000;
 
@@ -1152,21 +1046,15 @@ function dibujarMarcaRemota() {
 
 // --- PRESENTAR: LA SALIDA SIGUE AL EDITOR ---
 // El editor (index.html) es el dueño del estado y la salida (?salida) lo sigue. Lo vivo
-// —puntos, color y el punto que se arrastra— llega en el mismo `estado` que lee control/,
-// juntado cada 50 ms mientras algo cambia. Lo de estructura —quads nuevos o borrados,
-// fuentes, código Hydra, otra escena— llega por localStorage: el editor ya guarda en cada
-// uno de esos cambios, y el evento `storage` le avisa a la salida. Mientras oye a un
-// editor, la salida no guarda ni hace caso a control/. Ver control/NOTAS.md, "Cambio de rumbo".
+// —puntos, color y el punto que se arrastra— llega en `estado`, juntado cada 50 ms
+// mientras algo cambia. Lo de estructura —quads nuevos o borrados, fuentes, código Hydra,
+// otra escena— llega por localStorage: el editor ya guarda en cada uno de esos cambios, y
+// el evento `storage` le avisa a la salida. La salida no guarda nunca.
 
 let ventanaSalida = null;     // en el editor: la ventana que abrió Presentar
 const salidas = new Map();    // en el editor: id → { visto, lienzo }
-let editorUltimo = 0;         // en la salida: cuándo llegó el último estado de un editor
 let editorReproduce = false;
 let firmaMontada = null;      // la estructura de la escena montada (ver firmaEscena)
-
-function editorVivo() {
-  return SALIDA && performance.now() - editorUltimo < 3000;
-}
 
 // Lo que obliga a montar la escena de nuevo: número y forma de los quads y sus fuentes.
 // No entran los puntos ni el color, que se siguen en vivo, ni el código Hydra, que basta
@@ -1179,11 +1067,10 @@ function firmaEscena(sceneData) {
   ]));
 }
 
-// El punto que se arrastra aquí (o desde control/), para que la salida lo marque.
+// El punto que se arrastra aquí, para que la salida lo marque.
 function marcaParaSalida() {
   if (SALIDA) return null;
   if (selected.quad !== -1) return { i: selected.quad, k: selected.move ? -1 : selected.vert };
-  if (marcaRemota && performance.now() - marcaRemota.visto < 100) return { i: marcaRemota.i, k: marcaRemota.k };
   return null;
 }
 
@@ -1275,7 +1162,6 @@ function seguirQuads(datos) {
 }
 
 function seguirEditor(m) {
-  editorUltimo = performance.now();
   editorReproduce = !!m.reproduccion?.activa;
   if (m.escena !== scenes[currentSceneIndex]?.id) return;   // la otra escena llega por storage
   seguirQuads(m.quads || []);
@@ -1286,10 +1172,10 @@ function seguirEditor(m) {
 // --- FUENTES DEL EDITOR EN LA SALIDA ---
 // Paso 4 de "Control desde el modo edición". Lo que no viaja como texto vive en la máquina
 // del editor y la salida lo toma prestado: un archivo local por su blob: (en el estado, ver
-// estadoParaControl) y la cámara y la pantalla por la referencia de window.open(), porque un
+// estadoParaSalida) y la cámara y la pantalla por la referencia de window.open(), porque un
 // MediaStream no cabe en un mensaje. La salida no tiene botones para pedir la pantalla, y
 // la cámara la pedía por su cuenta, con un alert() en el proyector si no había permiso.
-// Probado en Chromium y Firefox (control/NOTAS.md, "Paso 4: prueba previa"). Al cerrar el
+// Probado en Chromium y Firefox (ver CLAUDE.md, "Fuentes del editor en la salida"). Al cerrar el
 // editor, lo prestado se acaba: el editor es el dueño.
 
 // En el editor: lo que tiene vivo, por quad de la escena montada.
@@ -2351,7 +2237,7 @@ function mouseDragged() {
       pt.y = m.y;
       if (shape.kind !== 'freeform') buildTessCache(shape);
     }
-    publicarEstado();   // control/ sigue el arrastre (se junta en un mensaje cada 50 ms)
+    publicarEstado();   // la salida sigue el arrastre (se junta en un mensaje cada 50 ms)
   }
 }
 
@@ -2378,7 +2264,6 @@ function doubleClicked() {
 function windowResized() {
   if (glContextLost) return;
   resizeCanvas(windowWidth, windowHeight);
-  publicarEstado();   // control/ dibuja los puntos a la escala de este lienzo
 }
 
 // --- GESTIÓN DE ESCENAS ---
@@ -2643,7 +2528,7 @@ function renderSceneStrip() {
     const btn = document.getElementById('pbtn-' + mode);
     if (btn) btn.classList.toggle('active', isPlaying && playbackMode === mode);
   });
-  publicarEstado();   // control/ ve las escenas y si se está reproduciendo
+  publicarEstado();   // la salida sabe si el editor reproduce, para el fundido
 }
 
 // --- REPRODUCCIÓN ---

@@ -1,6 +1,5 @@
-// El detector de caras de control/, como módulo: lo usan control/index.html y la sección
-// "interacción" del panel de minimapper (sketch.js lo carga con import() sólo al encender
-// la cámara). La lista de lecturas y cómo se calculan quedan en un solo lugar.
+// El detector de caras de la sección "interacción" del panel, como módulo: sketch.js lo
+// carga con import() sólo al encender la cámara, así index.html sigue ligero.
 //
 // Una lectura = un nombre, un número de 0 a 1 y lo que mide. Agregar una lectura es sumar
 // una fila aquí y calcularla en leer(): minimapper la descubre sola y la muestra en los
@@ -13,9 +12,9 @@ export const LECTURAS = [
 const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1'
 const MODELO = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite'
 
-// crearLector({ delegados }): `delegados` en orden de preferencia. control/ prueba la GPU
-// primero; minimapper pide sólo CPU, porque la GPU abriría un tercer contexto WebGL junto
-// a p5 y Hydra, uno más que se pierde al conectar el proyector.
+// crearLector({ delegados }): `delegados` en orden de preferencia. minimapper pide sólo CPU:
+// la GPU abriría un tercer contexto WebGL junto a p5 y Hydra, uno más que se pierde al
+// conectar el proyector. Con un modelo tan chico, la diferencia no se nota.
 export function crearLector ({ delegados = ['GPU', 'CPU'], umbral = 0.45 } = {}) {
   let detector = null, cargando = null, ultimo = -1, crudo = 0, antes = performance.now()
   const valores = Object.fromEntries(LECTURAS.map(l => [l.nombre, 0]))
