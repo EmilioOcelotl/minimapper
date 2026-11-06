@@ -297,7 +297,7 @@ function applySession(session) {
   currentSceneIndex = Math.min(normalized.currentSceneIndex, scenes.length - 1);
   playbackMode = normalized.playbackMode;
   // Una sesión sin montaje (anterior a las dos salidas) deja el que hay.
-  if (normalized.montaje) { montaje = normalizarMontaje(normalized.montaje); renderMontaje(); }
+  if (normalized.montaje) { montaje = normalizarMontaje(normalized.montaje); aplicarResolucionHydra(); renderMontaje(); }
   // Las capturas que estaban aparcadas en las escenas que esta sesión reemplaza no las
   // alcanzó el clearQuadSource() de arriba, que sólo tocó los quads vivos.
   releaseScreenSources(dropped);
@@ -1039,7 +1039,7 @@ let estadoPendiente = false;
 
 function estadoParaSalida() {
   return {
-    tipo: 'estado', ventana: VENTANA_ID, salida: SALIDA,
+    tipo: 'estado', ventana: VENTANA_ID, salida: SALIDA, t0: relojBase,
     escena: scenes[currentSceneIndex]?.id,
     reproduccion: { activa: isPlaying, modo: playbackMode },
     marca: marcaParaSalida(),
@@ -1169,14 +1169,14 @@ function notarSalida(m) {
 // no de la obra: se guarda con la sesión, no por escena. Ver CLAUDE.md, "Lienzo extendido".
 
 const RESOLUCIONES = { '1280x800': { w: 1280, h: 800 }, '1920x1080': { w: 1920, h: 1080 } };
-let montaje = { n: 1, res: ['ventana', '1920x1080'] };
+let montaje = { n: 1, res: ['ventana', '1920x1080'], hydra: 'alta' };
 
 function normalizarMontaje(m) {
   const n = m && m.n === 2 ? 2 : 1;
   const r = Array.isArray(m && m.res) ? m.res : [];
   const a = r[0] in RESOLUCIONES || (n === 1 && r[0] === 'ventana') ? r[0] : (n === 1 ? 'ventana' : '1920x1080');
   const b = r[1] in RESOLUCIONES ? r[1] : '1920x1080';
-  return { n, res: [a, b] };
+  return { n, res: [a, b], hydra: m && m.hydra === 'normal' ? 'normal' : 'alta' };
 }
 
 // Las regiones en coordenadas de puntos. null: "ventana", sin región fija.
@@ -1204,7 +1204,8 @@ function regionPropia() {
 }
 
 function setMontajeN(n) {
-  montaje = normalizarMontaje({ n, res: [montaje.res[0] === 'ventana' && n === 2 ? '1920x1080' : montaje.res[0], montaje.res[1]] });
+  montaje = normalizarMontaje({ ...montaje, n, res: [montaje.res[0] === 'ventana' && n === 2 ? '1920x1080' : montaje.res[0], montaje.res[1]] });
+  aplicarResolucionHydra();
   saveToLocalStorage();
   renderMontaje();
 }
@@ -1212,9 +1213,50 @@ function setMontajeN(n) {
 function setMontajeRes(i, valor) {
   const res = [...montaje.res];
   res[i] = valor;
-  montaje = normalizarMontaje({ n: montaje.n, res });
+  montaje = normalizarMontaje({ ...montaje, res });
   saveToLocalStorage();
   renderMontaje();
+}
+
+function setMontajeHydra(calidad) {
+  montaje = normalizarMontaje({ ...montaje, hydra: calidad });
+  aplicarResolucionHydra();
+  saveToLocalStorage();
+  renderMontaje();
+}
+
+// --- HYDRA CON DOS SALIDAS: RESOLUCIÓN Y RELOJ ---
+// Paso 4 del plan. Con una salida, Hydra sigue en 512×512 y con su propio reloj, como
+// siempre. Con dos, la textura es apaisada (32:9, la de dos proyectores 16:9 juntos), así
+// que cada mitad (ver RECORTE) es 16:9 y tiene más pixeles: 1024×576 por proyector en
+// "alta", 512×288 en "normal". Cambia para todos los quads Hydra: uno que no use recorte
+// ve la textura apaisada estirada. Y el reloj: cada ventana corre su Hydra, así que el
+// editor fija un instante cero (relojBase) que manda en `estado`, y cada ventana pone
+// `time` en lo que va desde ahí. Tiene que ser reciente: con millones de segundos, el
+// noise() de Hydra pierde precisión en la GPU y la textura sale negra (lo enseñó
+// tools/dos-salidas). Hydra suma su dt después, en su propio cuadro: la diferencia entre
+// ventanas queda en unos ms. Límite: el feedback (src(o0)), Math.random(), mouse y el
+// audio no se sincronizan con el reloj.
+const RESOLUCION_HYDRA = { una: { w: 512, h: 512 }, normal: { w: 1024, h: 288 }, alta: { w: 2048, h: 576 } };
+let relojBase = Date.now();   // en el editor, al cargar; en la salida, el del editor
+
+function resolucionHydra() {
+  return montaje.n === 2 ? RESOLUCION_HYDRA[montaje.hydra] : RESOLUCION_HYDRA.una;
+}
+
+// Hydra y los proxies por slot al tamaño del montaje. Los proxies se rehacen (objetos
+// nuevos): p5 guarda la textura por objeto, y uno redimensionado podría quedar con la vieja.
+function aplicarResolucionHydra() {
+  if (typeof hydra === 'undefined' || !hydra.setResolution || !hydraCanvases.length) return;
+  const r = resolucionHydra();
+  if (hydra.width === r.w && hydra.height === r.h && hydraCanvases[0].width === r.w) return;
+  hydra.setResolution(r.w, r.h);
+  hydraCanvases = hydraCanvases.map(g => { g.remove(); return createGraphics(r.w, r.h); });
+}
+
+function sincronizarRelojHydra() {
+  if (montaje.n !== 2 || typeof hydra === 'undefined' || !hydra.synth) return;
+  hydra.synth.time = (Date.now() - relojBase) / 1000 * (hydra.synth.speed ?? 1);
 }
 
 // La pestaña "salidas" y los botones de Presentar.
@@ -1227,6 +1269,8 @@ function renderMontaje() {
     .map(([v, t]) => `<option value="${v}" ${v === actual ? 'selected' : ''}>${t}</option>`).join('');
   const filas = (dos ? ['A', 'B'] : ['A']).map((id, i) =>
     `<label class="montaje-fila">${dos ? id : 'salida'}<select onchange="setMontajeRes(${i}, this.value)">${opciones(i, montaje.res[i])}</select></label>`);
+  if (dos) filas.push(`<label class="montaje-fila" title="La textura de Hydra con dos salidas: alta da más detalle por proyector; normal pesa menos (para una máquina lenta o Firefox)">Hydra<select onchange="setMontajeHydra(this.value)">` +
+    [['alta', 'alta · 2048×576'], ['normal', 'normal · 1024×288']].map(([v, t]) => `<option value="${v}" ${montaje.hydra === v ? 'selected' : ''}>${t}</option>`).join('') + '</select></label>');
   const res = document.getElementById('montaje-res');
   if (res) res.innerHTML = filas.join('');
   const botones = document.getElementById('presentar-botones');
@@ -1369,6 +1413,7 @@ function seguirQuads(datos) {
 
 function seguirEditor(m) {
   editorReproduce = !!m.reproduccion?.activa;
+  if (typeof m.t0 === 'number' && isFinite(m.t0)) relojBase = m.t0;
   if (m.escena !== scenes[currentSceneIndex]?.id) return;   // la otra escena llega por storage
   seguirQuads(m.quads || []);
   seguirArchivosLocales(m.quads || []);
@@ -1492,6 +1537,7 @@ function seguirGuardado() {
   playbackMode = config.playbackMode || 'once';
   montaje = normalizarMontaje(config.montaje);
   actualizarSalidaDOM();
+  aplicarResolucionHydra();
   const indice = Math.min(config.currentSceneIndex || 0, scenes.length - 1);
   const escena = scenes[indice];
   currentSceneIndex = indice;   // la misma escena puede cambiar de lugar si se borra otra
@@ -1607,6 +1653,7 @@ function setup() {
   hc.hide();
   window.noise = _hydraNoise; // restore after p5 overwrote it
   for (let i = 0; i < 4; i++) hydraCanvases.push(createGraphics(512, 512));
+  aplicarResolucionHydra();   // con dos salidas, apaisada (ver HYDRA CON DOS SALIDAS)
   gridGfx = buildGridTexture();
   colorShader = createShader(COLOR_VERT, COLOR_FRAG);
 
@@ -1616,6 +1663,7 @@ function setup() {
 
 function draw() {
   if (glContextLost) return;
+  sincronizarRelojHydra();
   background(0);
   textureMode(NORMAL);
 
@@ -1657,7 +1705,7 @@ function draw() {
         tex0: hydra.o[_slot].getCurrent(),
         resolution: [hc.elt.width, hc.elt.height]
       });
-      hydraCanvases[_slot].drawingContext.drawImage(hc.elt, 0, 0, 512, 512);
+      hydraCanvases[_slot].drawingContext.drawImage(hc.elt, 0, 0, hydraCanvases[_slot].width, hydraCanvases[_slot].height);
       tex = hydraCanvases[_slot];
     } else if (quad.sourceEl) {
       tex = quad.sourceEl;
