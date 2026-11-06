@@ -734,26 +734,31 @@ function toggleQuadInvertir(index) {
 
 // Arranca con las lecturas de control/ en 0: así un sketch con () => sensor.cercania
 // funciona aunque control no esté abierto, y la lista no se redibuja al llegar la primera.
-var sensor = { cercania: 0, cerca: 0 };
+// `x` e `y` las publica el recuadro de la sección "interacción" (ver INTERACCIÓN, abajo).
+var sensor = { cercania: 0, cerca: 0, x: 0, y: 0 };
 let sensorUltimo = 0;
 const SENSOR_CANAL = 'minimapper-control';
+let canalSensor = null;
+
+// Un solo receptor: lo alimentan el canal (control/, o el editor si esta es la salida)
+// y la sección "interacción" de este mismo panel.
+function recibirLecturas(lecturas) {
+  if (!lecturas) return;
+  let nuevas = false;
+  for (const [k, v] of Object.entries(lecturas)) {
+    // Sólo nombres simples: el nombre termina dentro del HTML de los selectores.
+    if (!/^[a-z_][a-z0-9_]*$/i.test(k) || typeof v !== 'number' || !isFinite(v)) continue;
+    if (!(k in sensor)) nuevas = true;
+    sensor[k] = Math.min(1, Math.max(0, v));
+  }
+  sensorUltimo = performance.now();
+  // Una lectura nueva aparece en los selectores de señal de cada quad.
+  if (nuevas && typeof renderQuadList === 'function') renderQuadList();
+}
 
 try {
-  const canal = new BroadcastChannel(SENSOR_CANAL);
-  canal.onmessage = (e) => {
-    const lecturas = e.data && e.data.lecturas;
-    if (!lecturas) return;
-    let nuevas = false;
-    for (const [k, v] of Object.entries(lecturas)) {
-      // Sólo nombres simples: el nombre termina dentro del HTML de los selectores.
-      if (!/^[a-z_][a-z0-9_]*$/i.test(k) || typeof v !== 'number' || !isFinite(v)) continue;
-      if (!(k in sensor)) nuevas = true;
-      sensor[k] = Math.min(1, Math.max(0, v));
-    }
-    sensorUltimo = performance.now();
-    // Una lectura nueva aparece en los selectores de señal de cada quad.
-    if (nuevas && typeof renderQuadList === 'function') renderQuadList();
-  };
+  canalSensor = new BroadcastChannel(SENSOR_CANAL);
+  canalSensor.onmessage = (e) => recibirLecturas(e.data && e.data.lecturas);
 } catch (e) {
   console.warn('BroadcastChannel no disponible: control/ no puede conectarse.', e);
 }
@@ -788,13 +793,170 @@ setInterval(() => {
   const vivo = sensorVivo();
   el.classList.toggle('vivo', vivo);
   el.textContent = vivo
-    ? 'control · ' + claves.map(k => `${k} ${sensor[k].toFixed(2)}`).join(' · ')
-    : (sensorUltimo ? 'control · sin señal' : 'control · abre control/ en otra ventana');
+    ? 'señal · ' + claves.map(k => `${k} ${sensor[k].toFixed(2)}`).join(' · ')
+    : (sensorUltimo ? 'señal · ninguna' : 'señal · enciende el mouse o la cámara');
   quads.forEach((q, i) => {
     const out = document.getElementById(`color-rampa-${i}`);
     if (out && q.color && q.color.senal) out.textContent = (q.color.rampa ?? 0).toFixed(2);
   });
 }, 200);
+
+// --- INTERACCIÓN: LECTURAS HECHAS EN ESTE PANEL ---
+// Paso 3 de "Control desde el modo edición": lo que hacía control/ en otra ventana, aquí.
+// Dos fuentes, cada una con su botón: el mouse sobre un recuadro (`x`, `y`) y la cámara
+// con el detector de caras de control/ (`cercania`, `cerca`). Las dos entran por el mismo
+// recibirLecturas() que el canal y salen por el canal hacia la salida, que las aplica
+// igual que si vinieran de control/. Nada de esto corre si no se enciende: el detector se
+// baja con import() al encender la cámara, y en presentación la miniatura no se dibuja.
+// Al apagar una fuente sus lecturas bajan a 0, como cuando control/ se calla.
+
+const INTERACCION_HZ = 20;
+const interaccion = {
+  mouse: false, xy: { x: 0.5, y: 0.5 },
+  camara: false, lector: null, video: null, cuadroUltimo: 0,
+};
+
+function publicarLecturas(lecturas) {
+  recibirLecturas(lecturas);
+  canalSensor?.postMessage({ lecturas });   // el objeto que publica no se oye a sí mismo
+}
+
+setInterval(() => {
+  if (SALIDA || (!interaccion.mouse && !interaccion.camara)) return;
+  const v = {};
+  if (interaccion.mouse) Object.assign(v, interaccion.xy);
+  if (interaccion.camara && interaccion.lector?.listo) Object.assign(v, interaccion.lector.valores);
+  if (Object.keys(v).length) publicarLecturas(v);
+}, 1000 / INTERACCION_HZ);
+
+// El recuadro: arrastrar dentro mueve el punto y el punto se queda donde se suelta.
+// `y` crece hacia arriba, como en una gráfica.
+function toggleMouseSensor() {
+  interaccion.mouse = !interaccion.mouse;
+  document.getElementById('sensor-mouse-btn').classList.toggle('active', interaccion.mouse);
+  document.getElementById('sensor-xy').hidden = !interaccion.mouse;
+  if (!interaccion.mouse) publicarLecturas({ x: 0, y: 0 });
+  pintarXY();
+}
+
+function pintarXY() {
+  const punto = document.querySelector('#sensor-xy i');
+  if (!punto) return;
+  punto.style.left = (interaccion.xy.x * 100) + '%';
+  punto.style.top = ((1 - interaccion.xy.y) * 100) + '%';
+}
+
+function moverXY(e) {
+  const r = e.currentTarget.getBoundingClientRect();
+  interaccion.xy = {
+    x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+    y: Math.min(1, Math.max(0, 1 - (e.clientY - r.top) / r.height)),
+  };
+  pintarXY();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const pad = document.getElementById('sensor-xy');
+  if (!pad) return;
+  pad.addEventListener('pointerdown', (e) => { pad.setPointerCapture(e.pointerId); moverXY(e); });
+  pad.addEventListener('pointermove', (e) => { if (e.buttons) moverXY(e); });
+  const umbral = document.getElementById('sensor-umbral');
+  umbral?.addEventListener('input', () => {
+    if (interaccion.lector) interaccion.lector.umbral = parseFloat(umbral.value);
+  });
+  pintarXY();
+});
+
+function avisarCamara(texto, error = false) {
+  const el = document.getElementById('sensor-nota');
+  if (!el) return;
+  el.textContent = texto;
+  el.className = texto ? (error ? 'status-error' : 'status-ok') : '';
+}
+
+// Una cámara propia a 640×480, fuera del DOM, aunque un quad ya use la suya: pedirla dos
+// veces funciona en Chrome y Firefox. Delegate CPU (ver control/detector.js).
+async function toggleCamaraSensor() {
+  if (interaccion.camara) return detenerCamaraSensor();
+  const btn = document.getElementById('sensor-camara-btn');
+  btn.disabled = true;
+  try {
+    if (!interaccion.lector) {
+      avisarCamara('cargando el detector… la primera vez tarda unos segundos');
+      const { crearLector } = await import('./control/detector.js');
+      interaccion.lector = crearLector({ delegados: ['CPU'] });
+      interaccion.lector.umbral = parseFloat(document.getElementById('sensor-umbral').value);
+    }
+    avisarCamara('esperando el permiso de la cámara…');
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+    await video.play();
+    interaccion.video = video;
+    await interaccion.lector.cargar();
+    if (interaccion.video !== video) return;   // se apagó mientras cargaba
+    interaccion.camara = true;
+    btn.classList.add('active');
+    document.getElementById('sensor-camara').hidden = false;
+    avisarCamara('');
+    cuadroCamara(video);
+  } catch (e) {
+    console.error(e);
+    detenerCamaraSensor();
+    const negado = e && e.name === 'NotAllowedError';
+    avisarCamara(negado ? 'sin permiso para la cámara (sirve la página por http://localhost o https://)'
+                        : 'no se pudo: ' + (e.message || e), true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function detenerCamaraSensor() {
+  const estaba = interaccion.camara;
+  interaccion.video?.srcObject?.getTracks().forEach(t => t.stop());
+  interaccion.video = null;
+  interaccion.camara = false;
+  document.getElementById('sensor-camara-btn')?.classList.remove('active');
+  const caja = document.getElementById('sensor-camara');
+  if (caja) caja.hidden = true;
+  if (estaba) publicarLecturas({ cercania: 0, cerca: 0 });
+}
+
+// Bucle propio, no en draw(): un cuadro de cámara a la vez, a no más de INTERACCION_HZ.
+// detectForVideo es síncrono (2–4 ms con este modelo) y en draw() frenaría el mapeo.
+function cuadroCamara(video) {
+  if (interaccion.video !== video) return;
+  const otra = () => video.requestVideoFrameCallback
+    ? video.requestVideoFrameCallback(() => cuadroCamara(video))
+    : requestAnimationFrame(() => cuadroCamara(video));
+  const ahora = performance.now();
+  if (ahora - interaccion.cuadroUltimo < 1000 / INTERACCION_HZ) return otra();
+  interaccion.cuadroUltimo = ahora;
+  interaccion.lector.leer(video, ahora);
+  const ui = document.getElementById('ui');
+  if (uiVisible && !ui.classList.contains('collapsed')) pintarVistaCamara(video, interaccion.lector);
+  otra();
+}
+
+// Lo que ve la cámara, en espejo, con la caja de la cara (verde si pasa el umbral).
+function pintarVistaCamara(video, lector) {
+  const cv = document.getElementById('sensor-vista');
+  if (!cv || video.readyState < 2) return;
+  const ctx = cv.getContext('2d');
+  ctx.save();
+  ctx.translate(cv.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(video, 0, 0, cv.width, cv.height);
+  const c = lector.caja;
+  if (c) {
+    const sx = cv.width / video.videoWidth, sy = cv.height / video.videoHeight;
+    ctx.strokeStyle = lector.valores.cerca ? 'rgb(90,230,150)' : '#fff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(c.originX * sx, c.originY * sy, c.width * sx, c.height * sy);
+  }
+  ctx.restore();
+}
 
 // --- CONTROL: EDICIÓN DESDE OTRA VENTANA ---
 // Un canal aparte de las lecturas, que tienen el contrato fijo. minimapper publica qué

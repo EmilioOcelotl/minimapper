@@ -128,19 +128,13 @@
   </main>
 
   <script type="module">
-    // Una lectura = un nombre, un número de 0 a 1 y lo que mide. Agregar una lectura es
-    // sumar una fila aquí y calcularla en cuadro(): minimapper la descubre solo y la
-    // muestra en los selectores de señal.
-    const LECTURAS = [
-      { nombre: 'cercania', que: 'qué tan cerca está la cara más grande: su ancho contra el ancho del cuadro' },
-      { nombre: 'cerca', que: '1 si la cercanía pasa el umbral, 0 si no. Un evento: la rampa la pone cada quad', evento: true },
-    ]
-
-    const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1'
-    const MODELO = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite'
+    // Las lecturas y el detector viven en detector.js, que comparte la sección
+    // "interacción" del panel de minimapper.
+    import { LECTURAS, crearLector } from './detector.js'
+    const lector = crearLector()   // GPU, y si no hay, CPU
     const canal = new BroadcastChannel('minimapper-control')
 
-    const valores = Object.fromEntries(LECTURAS.map(l => [l.nombre, 0]))
+    const valores = lector.valores
     const tabla = document.getElementById('lecturas')
     tabla.innerHTML = LECTURAS.map(l => `
       <tr class="${l.evento ? 'evento' : ''}">
@@ -149,12 +143,11 @@
         <td class="que">${l.que}</td>
       </tr>`).join('')
 
-    let umbral = 0.45
     const umbralEl = document.getElementById('umbral')
     const leerUmbral = () => {
-      umbral = parseFloat(umbralEl.value)
-      document.getElementById('umbralOut').textContent = umbral.toFixed(2)
-      document.getElementById('marcaUmbral').style.left = (umbral * 100) + '%'
+      lector.umbral = parseFloat(umbralEl.value)
+      document.getElementById('umbralOut').textContent = lector.umbral.toFixed(2)
+      document.getElementById('marcaUmbral').style.left = (lector.umbral * 100) + '%'
     }
     umbralEl.addEventListener('input', leerUmbral)
     leerUmbral()
@@ -165,31 +158,10 @@
       error ? estado.setAttribute('data-error', '') : estado.removeAttribute('data-error')
     }
 
-    // Crea el detector en la GPU; si no hay, en la CPU.
-    // Una sola carga aunque se pulse dos veces: la promesa se comparte, y si falla se
-    // borra para poder intentar de nuevo.
-    let detector = null, cargando = null
+    let avisado = false
     function cargar () {
-      if (!cargando) {
-        avisar('cargando el modelo… la primera vez tarda unos segundos')
-        cargando = crear().catch(e => { cargando = null; throw e })
-      }
-      return cargando
-    }
-    async function crear () {
-      let vision, fileset
-      try {
-        vision = await import(MP + '/vision_bundle.mjs')
-        fileset = await vision.FilesetResolver.forVisionTasks(MP + '/wasm')
-      } catch (e) {
-        throw new Error('no se pudo bajar el modelo. Control necesita internet la primera vez; después queda guardado en el navegador')
-      }
-      const opciones = delegate => ({ baseOptions: { modelAssetPath: MODELO, delegate }, runningMode: 'VIDEO' })
-      try {
-        detector = await vision.FaceDetector.createFromOptions(fileset, opciones('GPU'))
-      } catch (e) {
-        detector = await vision.FaceDetector.createFromOptions(fileset, opciones('CPU'))
-      }
+      if (!lector.listo && !avisado) { avisado = true; avisar('cargando el modelo… la primera vez tarda unos segundos') }
+      return lector.cargar().catch(e => { avisado = false; throw e })
     }
 
     const video = document.createElement('video')
@@ -224,23 +196,11 @@
 
     const vista = document.getElementById('vista')
     const ctx = vista.getContext('2d')
-    let ultimo = -1, caja = null, crudo = 0, antes = performance.now()
 
     function cuadro (ahora) {
-      const dt = Math.min(0.1, (ahora - antes) / 1000)
-      antes = ahora
-      const listo = detector && video.readyState >= 2
-
-      if (listo && video.currentTime !== ultimo) {
-        ultimo = video.currentTime
-        const r = detector.detectForVideo(video, performance.now())
-        caja = r.detections.map(d => d.boundingBox).sort((a, b) => b.width - a.width)[0] || null
-      }
-      const medida = listo && caja ? Math.min(1, caja.width / video.videoWidth / 0.5) : 0
-      // apenas suavizado: el sensor crudo tiembla. La rampa de verdad la pone cada quad.
-      crudo += (medida - crudo) * (1 - Math.pow(0.5, dt * 60))
-      valores.cercania = crudo
-      valores.cerca = crudo > umbral ? 1 : 0
+      const listo = lector.listo && video.readyState >= 2
+      lector.leer(video, ahora)
+      const caja = lector.caja
 
       // lo que ve la cámara, en espejo, con la caja de la cara
       ctx.fillStyle = '#000'
@@ -622,7 +582,7 @@
     // Esto sólo dice si hay lectura en curso.
     setInterval(() => {
       const el = document.getElementById('canal')
-      const vivo = detector && video.readyState >= 2
+      const vivo = lector.listo && video.readyState >= 2
       el.classList.toggle('vivo', !!vivo)
       el.textContent = vivo ? 'publicando en el canal minimapper-control' : 'sin lectura: enciende la cámara o carga un video'
     }, 500)

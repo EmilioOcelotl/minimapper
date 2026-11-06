@@ -90,7 +90,25 @@
         <button id="add-freeform-btn" onclick="startDrawingFreeform()">+ Libre</button>
       </div>
       <div id="quad-list"></div>
-      <a id="control-estado" href="control/" target="minimapper-control" title="Abrir control en otra ventana">control · abre control/ en otra ventana</a>
+    </div>
+
+    <div class="panel-section interaccion">
+      <div class="section-label">interacción</div>
+      <div class="section-actions">
+        <button id="sensor-mouse-btn" onclick="toggleMouseSensor()"
+          title="Un recuadro: arrastra dentro y publica x e y, de 0 a 1. Elígelas como señal de un quad o léelas en Hydra con sensor.x">mouse</button>
+        <button id="sensor-camara-btn" onclick="toggleCamaraSensor()"
+          title="Detecta la cara más grande y publica cercania y cerca. Nada se graba ni sale de esta computadora">cámara</button>
+      </div>
+      <div id="sensor-xy" hidden><i></i></div>
+      <div id="sensor-camara" hidden>
+        <canvas id="sensor-vista" width="160" height="120" aria-label="Lo que ve la cámara"></canvas>
+        <label class="mic-sensitivity"><span class="sensitivity-label">umbral</span>
+          <input id="sensor-umbral" type="range" min="0.05" max="0.95" step="0.01" value="0.45"></label>
+      </div>
+      <div id="sensor-nota"></div>
+      <a id="control-estado" href="control/" target="minimapper-control"
+        title="Las lecturas que llegan, de aquí o de control/. Clic: abrir control/ en otra ventana">señal · enciende el mouse o la cámara</a>
     </div>
 
     <div class="panel-section">

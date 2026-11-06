@@ -12,7 +12,7 @@
 // Para forzar que todos reciban una versión nueva de los archivos, sube
 // CACHE_VERSION. El activate borra los cachés viejos.
 
-const CACHE_VERSION = 'minimapper-v21';
+const CACHE_VERSION = 'minimapper-v22';
 
 // Archivos locales que se precachean al instalar. Rutas relativas para que
 // funcione tanto en la raíz como en un subdirectorio (GitHub Pages: /minimapper/).
@@ -23,6 +23,7 @@ const APP_SHELL = [
   './styles.css',
   './control/',
   './control/index.html',
+  './control/detector.js',
   './assets/img/minimapperBanner.png',
   './assets/img/minimapperCaptura.png',
 ];

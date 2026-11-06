@@ -1039,6 +1039,51 @@ select option {
   color: rgb(150, 255, 200);
 }
 
+/* --- Interacción: mouse y cámara como lecturas, en el panel --- */
+#sensor-xy {
+  position: relative;
+  margin-top: 8px;
+  height: 80px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.08)) center / 1px 100% no-repeat,
+    linear-gradient(rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.08)) center / 100% 1px no-repeat;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+#sensor-xy i {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -6px 0 0 -6px;
+  border: 1px solid rgb(255, 200, 64);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+#sensor-camara {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#sensor-vista {
+  width: 160px;
+  height: 120px;
+  background: #000;
+}
+
+#sensor-nota {
+  font-size: 10px;
+  margin-top: 6px;
+}
+
+#sensor-nota:empty,
+#sensor-xy[hidden],
+#sensor-camara[hidden] { display: none; }
+
 /* --- Estado de control/ (lecturas por BroadcastChannel) y de la salida --- */
 #control-estado,
 #salida-estado {
