@@ -12,6 +12,14 @@
 //
 // Los casos salen de las entregas del 13 nov 2026 para la proyección del 20 nov.
 
+// Enlaces del grupo que encabezan la bienvenida, arriba de los de siempre.
+export const RECURSOS = {
+  'lab-cct': [
+    { texto: 'Página del curso', url: 'https://emilioocelotl.github.io/centro-2027-I/lab-cct/', nota: 'lab-cct' },
+    { texto: 'Ejemplos de interacción', url: 'https://emilioocelotl.github.io/centro-2027-I/lab-cct/interaccion/', nota: 'sesión 9' },
+  ],
+}
+
 export const EQUIPOS = {
   'lab-cct': [
     {

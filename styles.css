@@ -583,6 +583,48 @@ select option {
   margin: 8px 0;
 }
 
+/* Bienvenida breve: recursos como filas, instrucciones plegadas */
+.welcome-recursos {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.welcome-recursos li { border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
+.welcome-recursos li[hidden] { display: none; }
+
+#welcome-box .welcome-recursos a {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 2px;
+  color: #fff;
+  text-decoration: none;
+  border-bottom: none;
+}
+
+#welcome-box .welcome-recursos a::after { content: '↗'; color: rgba(255, 255, 255, 0.4); }
+#welcome-box .welcome-recursos a span { margin-left: auto; color: rgba(255, 255, 255, 0.35); }
+#welcome-box .welcome-recursos a:hover { background: rgba(255, 255, 255, 0.05); }
+
+#welcome-ayuda { margin-top: 14px; }
+
+#welcome-ayuda summary {
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.7);
+  padding: 4px 2px;
+}
+
+#welcome-ayuda summary:hover { color: #fff; }
+#welcome-ayuda[open] summary { margin-bottom: 4px; }
+
+#welcome-box .welcome-nota {
+  margin: 14px 0 0;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
 #welcome-box .close-welcome {
   position: absolute;
   top: 10px;

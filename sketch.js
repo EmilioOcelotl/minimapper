@@ -1409,14 +1409,25 @@ async function iniciarEquipos() {
     else grupo = localStorage.getItem('minimapper_equipos');
   } catch (e) {}
   if (!grupo) return;
-  let lista;
-  try { lista = (await import('./equipos.js')).EQUIPOS[grupo]; } catch (e) { console.warn('equipos.js no cargó', e); return; }
+  let modulo;
+  try { modulo = await import('./equipos.js'); } catch (e) { console.warn('equipos.js no cargó', e); return; }
+  const lista = modulo.EQUIPOS[grupo];
+  ponerRecursosGrupo((modulo.RECURSOS || {})[grupo]);
   if (!Array.isArray(lista) || !lista.length) return;
   let elegido = '';
   try { elegido = localStorage.getItem('minimapper_equipo') || ''; } catch (e) {}
   equipos = { grupo, lista, elegido: lista.some(e => e.id === elegido) ? elegido : '' };
   document.getElementById('equipos').hidden = false;
   renderEquipos();
+}
+
+// Los enlaces del grupo, como filas arriba de los de siempre en la bienvenida.
+function ponerRecursosGrupo(recursos) {
+  const li = document.getElementById('welcome-curso');
+  if (!li || !Array.isArray(recursos) || !recursos.length) return;
+  const esc = (t) => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  li.insertAdjacentHTML('beforebegin', recursos.map(r =>
+    `<li><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.texto)}${r.nota ? ` <span>${esc(r.nota)}</span>` : ''}</a></li>`).join(''));
 }
 
 function elegirEquipo(id) {

@@ -42,19 +42,29 @@
     <div id="welcome-box">
       <button class="close-welcome" onclick="closeWelcome()" title="Cerrar">×</button>
       <h2>MiniMapper</h2>
-      <p class="welcome-lead">Herramienta experimental de <strong>videomapping generativo</strong> en tiempo real, directamente en el navegador. Combina <a href="https://hydra.ojack.xyz/" target="_blank" rel="noopener">Hydra</a> (síntesis visual live-coding) con p5.js para proyectar visuales sobre superficies deformables.</p>
-      <p><em>Funciona mejor en Chrome o Firefox.</em></p>
-      <h3>Instrucciones</h3>
-      <p><strong>Hydra:</strong> Cada superficie tiene su propio editor de código Hydra y output independiente (o0–o3). CTRL+Enter o ▶ para ejecutar</p>
-      <p><strong>Fuente:</strong> Cada superficie puede usar Rejilla, Hydra, Video, Imagen, Cámara, Pantalla o Carrusel — elige con el selector. El carrusel avanza con detección de aplauso (botón <em>mic</em> en la sección de carrusel)</p>
-      <p><strong>Pantalla:</strong> Proyecta otra pestaña o aplicación sobre la superficie. Es el camino para lo que no entrega un archivo de video, como YouTube: abre el video en otra pestaña, elige <em>Pantalla</em> y compártela. Sigue viva al cambiar de escena; hay que volver a elegirla al recargar</p>
-      <p><strong>Rejilla:</strong> Toda superficie nueva nace con una rejilla de calibración. Sirve para alinearla con la superficie física antes de poner contenido: si la rejilla se ve recta sobre el muro, la textura también lo estará. Cuando quede bien, cambia la fuente en el selector</p>
-      <p><strong>Quads:</strong> Clic en + Quad, luego dibuja el área en el canvas con clic y arrastre. ESC cancela</p>
-      <p><strong>Formas libres:</strong> Clic en + Libre, luego clic para colocar cada vértice. Cierra con doble clic en cualquier parte, o clic en el primer vértice (se vuelve verde). Mínimo 3 vértices. ESC cancela</p>
-      <p><strong>Mapping:</strong> Arrastra los puntos de control para deformar la superficie. Las esquinas (rojo) están sobre la superficie; los puntos intermedios (amarillo) curvan los bordes. Mantén <strong>M</strong> al hacer clic en cualquier punto para mover toda la superficie en conjunto</p>
-      <p><strong>Atajos:</strong> CTRL + SHIFT + H para mostrar/ocultar la UI · ESC para silenciar o cancelar · CTRL + Z para deshacer · M + clic y arrastra para mover toda la superficie</p>
-      <p><strong>Auto-guardado:</strong> El código y los vértices se guardan automáticamente (las fuentes de video/imagen se deben recargar al abrir)</p>
-      <p><strong>Sesión:</strong> "Guardar sesión" descarga un archivo <code>.json</code> con todo tu trabajo: escenas, superficies, código e imágenes. "Cargar sesión" lo abre otra vez y <em>reemplaza</em> lo que tengas en pantalla — los videos y la cámara se deben recargar manualmente</p>
+      <p class="welcome-lead">Videomapping en el navegador: dibuja superficies, ajústalas sobre un objeto y ponles Hydra, video, imagen o cámara. Sin instalar nada.</p>
+
+      <!-- Recursos: los del grupo (equipos.js, RECURSOS) se agregan arriba con ?equipos=<grupo> -->
+      <ul class="welcome-recursos">
+        <li id="welcome-curso" hidden></li>
+        <li><a href="https://hydra.ojack.xyz/api/" target="_blank" rel="noopener">Funciones de Hydra <span>hydra.ojack.xyz</span></a></li>
+        <li><a href="https://github.com/EmilioOcelotl/minimapper" target="_blank" rel="noopener">Código y notas <span>github</span></a></li>
+      </ul>
+
+      <details id="welcome-ayuda">
+        <summary>Instrucciones</summary>
+        <p><strong>Quads:</strong> + Quad y arrastra en el lienzo. + Libre coloca vértices con clic y cierra con doble clic. ESC cancela</p>
+        <p><strong>Mapear:</strong> arrastra los puntos. Las esquinas (rojo) van sobre la superficie; los intermedios (amarillo) curvan los bordes. M + clic mueve la superficie entera</p>
+        <p><strong>Rejilla:</strong> toda superficie nace con una rejilla. Si se ve recta sobre el muro, la textura también lo estará. Después cambia la fuente</p>
+        <p><strong>Fuente:</strong> Rejilla, Hydra, Video, Imagen, Cámara, Pantalla o Carrusel. Cada superficie con Hydra tiene su editor y su salida (o0–o3): CTRL+Enter o ▶ para ejecutar</p>
+        <p><strong>Pantalla:</strong> proyecta otra pestaña o aplicación, por ejemplo YouTube. Hay que volver a elegirla al recargar</p>
+        <p><strong>Presentar:</strong> abre la salida en otra ventana. Llévala al proyector y dale doble clic para pantalla completa. Sigue lo que hagas en el editor</p>
+        <p><strong>Interacción:</strong> mouse, cámara y mic dan lecturas de 0 a 1. Elígelas como señal de una superficie o de una pista de sonido, o léelas en Hydra con <code>sensor.cercania</code> o <code>rampa('cercania', 2)</code></p>
+        <p><strong>Atajos:</strong> CTRL + SHIFT + H muestra u oculta el panel · ESC silencia o cancela · CTRL + Z deshace</p>
+        <p><strong>Guardar:</strong> todo se guarda solo en este navegador; los videos y archivos locales se vuelven a cargar al abrir. "Guardar sesión" descarga un <code>.json</code> para llevarlo a otra computadora; "Cargar sesión" lo abre y <em>reemplaza</em> lo que hay</p>
+      </details>
+
+      <p class="welcome-nota">Funciona mejor en Chrome.</p>
       <button id="welcome-start" onclick="closeWelcome()">Comenzar →</button>
     </div>
   </div>
