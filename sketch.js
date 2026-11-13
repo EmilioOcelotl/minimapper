@@ -1231,8 +1231,14 @@ function escenaSiguientePorSenal() {
 // Las pistas son de toda la sesión, no de una escena. Se guardan como los quads: un enlace
 // http persiste; un archivo local no, y al recargar queda su nombre y hay que volver a cargarlo.
 // Arrancar exige un gesto (autoplay): sólo ▶ las hace sonar.
+// Con señal, `mueve` dice qué sigue a la lectura: el volumen (lo de siempre) o la velocidad,
+// que va de `lenta` (lectura 0) a `rapida` (lectura 1) con el volumen fijo. El tono sube y
+// baja con la velocidad, como un disco: preservesPitch = false. El rango cabe en lo que
+// Firefox acepta (de 0.25 a 4; afuera lo silencia).
 let pistas = [];
-const PISTA_CAMPOS = ['id', 'nombre', 'url', 'volumen', 'senal', 'invertir', 'subida', 'bajada', 'bucle'];
+const PISTA_CAMPOS = ['id', 'nombre', 'url', 'volumen', 'senal', 'invertir', 'subida', 'bajada', 'bucle', 'mueve', 'lenta', 'rapida'];
+const PISTA_VELOCIDAD = { lenta: [0.25, 1], rapida: [1, 4] };
+const entre = (v, [a, b], d) => isFinite(v) ? Math.min(b, Math.max(a, +v)) : d;
 
 function normalizarPistas(lista) {
   return (Array.isArray(lista) ? lista : []).map((p, i) => ({
@@ -1245,6 +1251,9 @@ function normalizarPistas(lista) {
     subida: isFinite(p.subida) ? p.subida : 1,
     bajada: isFinite(p.bajada) ? p.bajada : 2,
     bucle: p.bucle !== false,
+    mueve: p.mueve === 'velocidad' ? 'velocidad' : 'volumen',
+    lenta: entre(p.lenta, PISTA_VELOCIDAD.lenta, 0.5),
+    rapida: entre(p.rapida, PISTA_VELOCIDAD.rapida, 2),
   }));
 }
 
@@ -1273,6 +1282,8 @@ function prepararAudioPista(p, src) {
   el.preload = 'auto';
   el.loop = p.bucle;
   el.volume = 0;
+  el.preservesPitch = false;
+  el.mozPreservesPitch = false;
   el.onerror = () => { p.nota = { text: 'No se pudo abrir el audio. Revisa el enlace o usa Archivo.', ok: false }; p.sonando = false; renderPistas(); };
   el.onended = () => { p.sonando = false; renderPistas(); };
   el.src = src;
@@ -1348,6 +1359,7 @@ function tocarPista(i) {
   p.estado = {};
   p.el.loop = p.bucle;
   p.el.volume = 0;
+  p.el.playbackRate = 1;
   p.el.play().then(() => { p.sonando = true; p.nota = null; renderPistas(); })
     .catch(e => { p.nota = { text: 'El navegador no la dejó sonar: ' + (e.message || e.name), ok: false }; renderPistas(); });
 }
@@ -1362,8 +1374,9 @@ function setPista(i, campo, valor) {
     saveToLocalStorage();
     return;
   }
-  if (campo === 'senal') {
-    p.senal = valor || '';
+  if (campo === 'senal' || campo === 'mueve') {
+    p[campo] = valor || '';
+    if (campo === 'mueve' && p.el) p.el.playbackRate = 1;
     p.estado = {};
     renderPistas();
     saveToLocalStorage();
@@ -1371,8 +1384,12 @@ function setPista(i, campo, valor) {
   }
   p[campo] = parseFloat(valor);
   const out = document.getElementById(`pista-${campo}-${i}`);
-  if (out) out.textContent = RAMPA_CAMPOS.includes(campo) ? segundos(p[campo]) : p[campo].toFixed(2);
+  if (out) out.textContent = RAMPA_CAMPOS.includes(campo) ? segundos(p[campo]) : (campo in PISTA_VELOCIDAD ? '×' : '') + p[campo].toFixed(2);
 }
+
+// La velocidad de una pista que sigue la señal con la velocidad. Sin señal, siempre 1.
+const porVelocidad = (p) => !!p.senal && p.mueve === 'velocidad';
+const velocidadPista = (p) => p.lenta + (p.rapida - p.lenta) * (p.nivel ?? 0);
 
 // A 20 Hz, desde el mismo intervalo que publica las lecturas.
 function avanzarPistas() {
@@ -1384,14 +1401,21 @@ function avanzarPistas() {
       if (p.invertir) meta = 1 - meta;
     }
     p.nivel = pasoRampa(p.estado || (p.estado = {}), meta, p.subida, p.bajada);
-    p.el.volume = Math.min(1, Math.max(0, p.volumen * p.nivel));
+    if (porVelocidad(p)) {
+      p.el.volume = p.volumen;
+      const v = velocidadPista(p);
+      // Sólo si cambia de verdad: cada asignación reajusta el remuestreo del navegador.
+      if (Math.abs(p.el.playbackRate - v) > 0.005) p.el.playbackRate = v;
+    } else {
+      p.el.volume = Math.min(1, Math.max(0, p.volumen * p.nivel));
+    }
   }
 }
 
 function pintarPistas() {
   pistas.forEach((p, i) => {
     const out = document.getElementById(`pista-nivel-${i}`);
-    if (out) out.textContent = p.sonando ? (p.volumen * (p.nivel ?? 0)).toFixed(2) : '—';
+    if (out) out.textContent = !p.sonando ? '—' : porVelocidad(p) ? '×' + velocidadPista(p).toFixed(2) : (p.volumen * (p.nivel ?? 0)).toFixed(2);
   });
 }
 
@@ -1415,20 +1439,26 @@ function renderPistas() {
       </div>
       ${p.nota ? `<div class="quad-url-note ${p.nota.ok ? 'status-ok' : 'status-error'}">${esc(p.nota.text)}</div>` : ''}
       <div class="quad-color">
-        <label title="El máximo: con señal, la lectura decide cuánto de este volumen suena">volumen<input type="range" min="0" max="1" step="0.01" value="${p.volumen}"
+        <label title="${porVelocidad(p) ? 'El volumen fijo: la lectura mueve la velocidad' : 'El máximo: con señal, la lectura decide cuánto de este volumen suena'}">volumen<input type="range" min="0" max="1" step="0.01" value="${p.volumen}"
           oninput="setPista(${i},'volumen',this.value)" onchange="saveToLocalStorage()"><output id="pista-volumen-${i}">${p.volumen.toFixed(2)}</output></label>
         <label>señal<select onchange="setPista(${i},'senal',this.value)">
           <option value="" ${!k ? 'selected' : ''}>siempre</option>
           ${[...new Set([...Object.keys(sensor), ...(k ? [k] : [])])].map(n =>
             `<option value="${n}" ${k === n ? 'selected' : ''}>${n}</option>`).join('')}
         </select><output id="pista-nivel-${i}" title="lo que suena ahora">—</output></label>
-        ${k ? `<label>invertir<button class="${p.invertir ? 'activo' : ''}" onclick="setPista(${i},'invertir')">${p.invertir ? 'sí' : 'no'}</button><span></span></label>
-        ${RAMPA_CAMPOS.map(c => `<label title="${c === 'subida' ? 'Segundos para subir del silencio al volumen' : 'Segundos para volver al silencio'}. 0 = de golpe">${c}<input type="range" min="0" max="10" step="0.1" value="${p[c]}"
+        ${k ? `<label title="Qué sigue a la lectura: el volumen, o la velocidad (y con ella el tono) con el volumen fijo">mueve<select onchange="setPista(${i},'mueve',this.value)">
+          <option value="volumen" ${p.mueve !== 'velocidad' ? 'selected' : ''}>volumen</option>
+          <option value="velocidad" ${p.mueve === 'velocidad' ? 'selected' : ''}>velocidad</option>
+        </select><span></span></label>
+        ${p.mueve === 'velocidad' ? Object.entries(PISTA_VELOCIDAD).map(([c, [a, b]]) => `<label title="${c === 'lenta' ? 'La velocidad con la lectura en 0. 1 = normal' : 'La velocidad con la lectura en 1. 1 = normal'}">${c}<input type="range" min="${a}" max="${b}" step="0.05" value="${p[c]}"
+          oninput="setPista(${i},'${c}',this.value)" onchange="saveToLocalStorage()"><output id="pista-${c}-${i}">×${p[c].toFixed(2)}</output></label>`).join('') : ''}
+        <label>invertir<button class="${p.invertir ? 'activo' : ''}" onclick="setPista(${i},'invertir')">${p.invertir ? 'sí' : 'no'}</button><span></span></label>
+        ${RAMPA_CAMPOS.map(c => `<label title="${p.mueve === 'velocidad' ? (c === 'subida' ? 'Segundos para ir de lenta a rápida' : 'Segundos para volver a lenta') : (c === 'subida' ? 'Segundos para subir del silencio al volumen' : 'Segundos para volver al silencio')}. 0 = de golpe">${c}<input type="range" min="0" max="10" step="0.1" value="${p[c]}"
           oninput="setPista(${i},'${c}',this.value)" onchange="saveToLocalStorage()"><output id="pista-${c}-${i}">${segundos(p[c])}</output></label>`).join('')}` : ''}
         <label title="Al terminar vuelve a empezar">bucle<button class="${p.bucle ? 'activo' : ''}" onclick="setPista(${i},'bucle')">${p.bucle ? 'sí' : 'no'}</button><span></span></label>
       </div>
     </div>`;
-  }).join('') || '<p class="montaje-nota">Un archivo de audio o un enlace. Con una señal, el volumen sigue a la lectura; sin ella, suena siempre. Suena desde esta ventana: conecta aquí las bocinas.</p>';
+  }).join('') || '<p class="montaje-nota">Un archivo de audio o un enlace. Con una señal, el volumen o la velocidad siguen a la lectura; sin ella, suena siempre. Suena desde esta ventana: conecta aquí las bocinas.</p>';
 }
 
 // --- EQUIPOS ---
