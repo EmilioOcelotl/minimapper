@@ -310,6 +310,34 @@ label {
   font-size: 12px;
 }
 
+/* --- Sketch de p5 por quad --- */
+.quad-p5-code { height: 140px; }
+
+.p5-status {
+  font-size: 10px;
+  line-height: 1.3;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Los iframes de los sketches: detrás del lienzo, no ocultos (display:none frena su
+   requestAnimationFrame). 512×512 es el windowWidth/windowHeight que ve el sketch. */
+#p5-sketches {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+#p5-sketches iframe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 512px;
+  height: 512px;
+  border: 0;
+}
+
 /* --- Mic / sensibilidad (dentro de carrusel) --- */
 .carousel-mic-row {
   margin-top: 8px;

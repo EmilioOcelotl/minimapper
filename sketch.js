@@ -229,6 +229,7 @@ function saveSession() {
             if (srcUrl) data.sourceUrl = srcUrl;
             if (imageData) data.imageData = imageData;
             if (q.sourceType === 'hydra') { data.hydraCode = q.hydraCode || ''; data.hydraOutput = q.hydraOutput ?? 0; }
+            if (q.sourceType === 'p5') data.p5Code = q.p5Code || '';
             const color = colorParaGuardar(q.color);
             if (color) data.color = color;
             if (q.recorte) data.recorte = q.recorte;
@@ -330,10 +331,10 @@ function applySession(session) {
     }
     let quad;
     if (qData.kind === 'freeform') {
-      quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, color: { ...COLOR_NEUTRO, ...qData.color }, recorte: normalizarRecorte(qData.recorte) };
+      quad = { kind: 'freeform', vertices: (qData.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, p5Code: qData.p5Code || '', color: { ...COLOR_NEUTRO, ...qData.color }, recorte: normalizarRecorte(qData.recorte) };
     } else {
       const pts = qData.points || qData;
-      quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, color: { ...COLOR_NEUTRO, ...qData.color }, recorte: normalizarRecorte(qData.recorte) };
+      quad = { kind: 'quad', points: pts.map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, p5Code: qData.p5Code || '', color: { ...COLOR_NEUTRO, ...qData.color }, recorte: normalizarRecorte(qData.recorte) };
       buildTessCache(quad);
     }
     quads.push(quad);
@@ -348,6 +349,8 @@ function applySession(session) {
       });
     } else if (srcType === 'hydra' && hydraCode) {
       evalHydra(hydraCode);
+    } else if (srcType === 'p5') {
+      montarSketchP5(i);
     }
   });
   quads.forEach((q, i) => { if (q.sourceType === 'camera') startCamera(i); });
@@ -2134,6 +2137,10 @@ function seguirGuardado() {
       q.hydraCode = d.hydraCode;
       evalHydra(d.hydraCode);
     }
+    if (q && q.sourceType === 'p5' && d.p5Code != null && d.p5Code !== q.p5Code) {
+      q.p5Code = d.p5Code;
+      montarSketchP5(i);
+    }
   });
   seguirQuads(escena.quads);
 }
@@ -2272,6 +2279,7 @@ function draw() {
     if (quad.sourceVideo && quad.sourceVideo.readyState >= 2) {
       quad.sourceEl.drawingContext.drawImage(quad.sourceVideo, 0, 0, 512, 512);
     }
+    if (quad.p5Frame) copiarSketchP5(quad);
 
     let tex;
     if (quad.sourceType === 'grid') {
@@ -2444,6 +2452,7 @@ function clearQuadSource(index, releaseSources = true) {
     quad.carousel = [];
     quad.carouselIndex = 0;
   }
+  if (quad.p5Frame || quad.p5Proxy) desmontarSketchP5(quad);   // el código queda; el sketch se va
   if (quad.sourceUrl) {
     // La salida no crea blob:, sólo abre los del editor: revocarlos se los rompería a él.
     if (releaseSources && !SALIDA && !quad.sourceUrl.startsWith('http')) URL.revokeObjectURL(quad.sourceUrl);
@@ -2516,6 +2525,10 @@ function changeQuadSource(index, type) {
     renderQuadList();
   } else if (type === 'camera') {
     startCamera(index);
+  } else if (type === 'p5') {
+    if (!quads[index].p5Code) quads[index].p5Code = P5_CODIGO_INICIAL;
+    montarSketchP5(index);
+    renderQuadList();
   } else {
     renderQuadList();
   }
@@ -2931,6 +2944,126 @@ function stopMic() {
   micCambio();
 }
 
+// --- SKETCH DE P5 COMO FUENTE ---
+// sourceType 'p5': el código se pega tal cual sale del editor de p5 (modo global) y corre en
+// un <iframe srcdoc> propio, con su propio p5. En esta página no cabe: minimapper ya es un
+// sketch global, y un segundo setup()/draw() chocaría con el suyo. srcdoc es del mismo
+// origen, así que draw() copia el canvas del iframe a un proxy p5.Graphics y de ahí es la
+// misma tubería que el video. Un error se queda en el iframe; un bucle infinito no, porque
+// comparte el hilo. Es código de quien opera la máquina, como el de Hydra.
+// Un iframe por quad. Arranca de cero al montar la escena, al recargar y con ▶.
+
+const P5_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.min.js';
+const P5_CODIGO_INICIAL = `function setup() {
+  createCanvas(512, 512);
+  noStroke();
+}
+
+function draw() {
+  background(0, 25);
+  const x = width / 2 + 160 * sin(frameCount * 0.021);
+  const y = height / 2 + 160 * cos(frameCount * 0.034);
+  fill(255, 200, 64);
+  // sensor trae las lecturas de la pestaña de interacción
+  circle(x, y, 60 + 200 * sensor.volumen);
+}`;
+
+// Las líneas del srcdoc antes del código, para que el error diga la línea del textarea.
+const P5_PREFIJO = (cdn) => `<!doctype html><html><head><meta charset="utf-8">
+<style>html,body{margin:0;overflow:hidden;background:#000}</style>
+<script>
+Object.defineProperty(window, 'sensor', { get: () => parent.sensor });
+window.rampa = (...a) => parent.rampa(...a);
+window.onerror = (msg, src, linea) => { frameElement && frameElement._p5Error && frameElement._p5Error(msg, linea); };
+</script>
+<script src="${cdn}"></script>
+<script>
+`;
+const P5_LINEAS_PREFIJO = P5_PREFIJO(P5_CDN).split('\n').length - 1;
+
+function contenedorSketches() {
+  let c = document.getElementById('p5-sketches');
+  if (!c) {
+    // Detrás del lienzo, no oculto: con display:none el navegador frena el requestAnimationFrame
+    // del iframe y el sketch deja de dibujar.
+    c = document.createElement('div');
+    c.id = 'p5-sketches';
+    document.body.appendChild(c);
+  }
+  return c;
+}
+
+function desmontarSketchP5(quad) {
+  if (quad.p5Frame) { quad.p5Frame._p5Error = null; quad.p5Frame.remove(); quad.p5Frame = null; }
+  if (quad.p5Proxy) { quad.p5Proxy.remove(); quad.p5Proxy = null; }
+  quad.sourceEl = null;
+}
+
+function montarSketchP5(index) {
+  const quad = quads[index];
+  if (!quad) return;
+  desmontarSketchP5(quad);
+  quad.p5Error = null;
+  const frame = document.createElement('iframe');
+  frame.className = 'p5-sketch';
+  frame.setAttribute('aria-hidden', 'true');
+  frame.tabIndex = -1;
+  frame._p5Error = (msg, linea) => {
+    const texto = `${msg}${linea ? ` (línea ${linea - P5_LINEAS_PREFIJO})` : ''}`;
+    const i = quads.findIndex(q => q.p5Frame === frame);
+    if (i === -1 || quads[i].p5Error === texto) return;   // draw() repite el error cada cuadro
+    quads[i].p5Error = texto;
+    pintarEstadoP5(i);
+  };
+  frame.addEventListener('load', () => {
+    const i = quads.findIndex(q => q.p5Frame === frame);
+    if (i !== -1 && !quads[i].p5Error) pintarEstadoP5(i, true);
+  });
+  frame.srcdoc = P5_PREFIJO(P5_CDN) + (quad.p5Code || '').replace(/<\/script/gi, '<\\/script') + '\n</script></head><body></body></html>';
+  quad.p5Frame = frame;
+  quad.p5Proxy = createGraphics(512, 512);
+  contenedorSketches().appendChild(frame);
+}
+
+// En draw(): el canvas del sketch al proxy. Hasta que haya canvas, el quad sigue en rejilla.
+function copiarSketchP5(quad) {
+  let lienzo = null;
+  try { lienzo = quad.p5Frame.contentDocument?.querySelector('canvas'); } catch (e) { return; }
+  if (!lienzo || !lienzo.width || !lienzo.height) return;
+  quad.p5Proxy.drawingContext.drawImage(lienzo, 0, 0, quad.p5Proxy.width, quad.p5Proxy.height);
+  quad.sourceEl = quad.p5Proxy;
+}
+
+function runQuadP5(index) {
+  if (!quads[index]) return;
+  montarSketchP5(index);
+  pintarEstadoP5(index);
+  saveToLocalStorage();
+}
+
+function stopQuadP5(index) {
+  if (!quads[index]) return;
+  desmontarSketchP5(quads[index]);
+  quads[index].p5Error = null;
+  pintarEstadoP5(index);
+}
+
+// Sin re-renderizar la lista: el textarea perdería el foco a media escritura.
+function pintarEstadoP5(index, listo = false) {
+  const el = document.getElementById(`p5-status-${index}`);
+  const q = quads[index];
+  if (!el || !q) return;
+  clearTimeout(el._t);
+  if (q.p5Error) { el.textContent = '✗ ' + q.p5Error; el.className = 'p5-status status-error'; return; }
+  el.textContent = listo ? '✓' : (q.p5Frame ? '…' : '');
+  el.className = 'p5-status status-ok';
+  if (listo) el._t = setTimeout(() => { el.textContent = ''; }, 3000);
+}
+
+function escaparHTML(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+}
+
 function renderQuadList() {
   const container = document.getElementById("quad-list");
   if (!container) return;
@@ -2968,6 +3101,20 @@ function renderQuadList() {
             <button onclick="runQuadHydra(${i})">▶</button>
             <button onclick="stopHydra()">■</button>
             <span id="hydra-status-${i}"></span>
+          </div>
+        </div>`
+      : '';
+
+    const p5Section = q.sourceType === 'p5'
+      ? `<div class="quad-hydra-section">
+          <textarea class="quad-hydra-code quad-p5-code" id="p5-code-${i}" spellcheck="false"
+            oninput="quads[${i}].p5Code=this.value"
+            onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();runQuadP5(${i});}"
+          >${escaparHTML(q.p5Code || '')}</textarea>
+          <div class="quad-hydra-actions">
+            <button onclick="runQuadP5(${i})" title="Arrancar el sketch de nuevo (CTRL+Enter)">▶</button>
+            <button onclick="stopQuadP5(${i})" title="Detener el sketch">■</button>
+            <span id="p5-status-${i}" class="p5-status ${q.p5Error ? 'status-error' : ''}">${q.p5Error ? '✗ ' + escaparHTML(q.p5Error) : ''}</span>
           </div>
         </div>`
       : '';
@@ -3031,6 +3178,7 @@ function renderQuadList() {
           <option value="camera"    ${q.sourceType === 'camera'    ? 'selected' : ''}>Cámara</option>
           <option value="pantalla"  ${q.sourceType === 'pantalla'  ? 'selected' : ''}>Pantalla</option>
           <option value="carousel"  ${q.sourceType === 'carousel'  ? 'selected' : ''}>Carrusel</option>
+          <option value="p5"        ${q.sourceType === 'p5'        ? 'selected' : ''}>Código p5</option>
         </select>
         ${fileBtn}
         ${screenBtn}
@@ -3039,6 +3187,7 @@ function renderQuadList() {
       ${urlRow}
       ${note}
       ${hydraSection}
+      ${p5Section}
       ${carouselSection}
       ${colorSection}
     `;
@@ -3157,6 +3306,7 @@ function snapshotCurrentScene() {
       : { kind: 'quad', points: q.points.map(p => ({ x: p.x, y: p.y })), sourceType: q.sourceType };
     if (srcUrl) data.sourceUrl = srcUrl;
     if (q.sourceType === 'hydra') { data.hydraCode = q.hydraCode || ''; data.hydraOutput = q.hydraOutput ?? 0; }
+    if (q.sourceType === 'p5') data.p5Code = q.p5Code || '';
     if (q.carousel && q.carousel.length) { data.carousel = q.carousel; data.carouselIndex = q.carouselIndex || 0; }
     const color = colorParaGuardar(q.color);
     if (color) data.color = color;
@@ -3189,9 +3339,9 @@ function _applySceneData(sceneData) {
       hydraSlots[hydraOutput]++;
     }
     if (q.kind === 'freeform') {
-      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0, color: { ...COLOR_NEUTRO, ...q.color }, recorte: normalizarRecorte(q.recorte) };
+      return { kind: 'freeform', vertices: (q.vertices || []).map(v => createVector(v.x, v.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, p5Code: q.p5Code || '', carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0, color: { ...COLOR_NEUTRO, ...q.color }, recorte: normalizarRecorte(q.recorte) };
     }
-    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0, color: { ...COLOR_NEUTRO, ...q.color }, recorte: normalizarRecorte(q.recorte) };
+    const quad = { kind: 'quad', points: (q.points || []).map(p => createVector(p.x, p.y)), sourceType: srcType, sourceEl: null, sourceUrl: null, hydraCode, hydraOutput, p5Code: q.p5Code || '', carousel: q.carousel || [], carouselIndex: q.carouselIndex || 0, color: { ...COLOR_NEUTRO, ...q.color }, recorte: normalizarRecorte(q.recorte) };
     buildTessCache(quad);
     return quad;
   });
@@ -3208,6 +3358,8 @@ function _applySceneData(sceneData) {
       startCamera(i);
     } else if (q.sourceType === 'hydra' && q.hydraCode) {
       evalHydra(q.hydraCode);
+    } else if (q.sourceType === 'p5') {
+      montarSketchP5(i);
     }
   });
   aplicarFuentesEditor();
