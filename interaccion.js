@@ -37,15 +37,22 @@ const MODELO_SILUETA = 'https://storage.googleapis.com/mediapipe-models/image_se
 // El punto de la mano que se publica: 9 es el nudillo del dedo medio, el centro de la palma.
 const PALMA = 9
 
-// crearLector({ delegados }): `delegados` en orden de preferencia. minimapper pide sólo CPU:
-// la GPU abriría un tercer contexto WebGL junto a p5 y Hydra, uno más que se pierde al
-// conectar el proyector. Con un modelo tan chico, la diferencia no se nota.
+// crearLector({ delegados }): `delegados` para el detector de caras, en orden de preferencia.
+// minimapper le pide sólo CPU: corre en este hilo y la GPU abriría un tercer contexto WebGL
+// junto a p5 y Hydra, uno más que se pierde al conectar el proyector. Con un modelo tan chico,
+// la diferencia no se nota. Manos y silueta, en cambio, prueban GPU primero: corren en su
+// worker, con su propio contexto, y si ése se pierde vuelven solos a CPU (ver los workers).
+//
+// La cara (cercania, cerca, cara_x, movimiento) sólo se calcula con `conCara`: si la cámara
+// se encendió nada más para las manos o la silueta, no se gasta este hilo en ella.
 export function crearLector ({ delegados = ['GPU', 'CPU'], umbral = 0.45 } = {}) {
   let detector = null, cargando = null, ultimo = -1, crudo = 0, antes = performance.now()
   let x = 0.5, mov = 0, movCrudo = 0, anterior = null, lienzo = null
-  let vision = null, fileset = null, manos = null, cargandoManos = null, ocupado = false
-  let segmentador = null, cargandoSilueta = null, ocupadaSilueta = false
-  let presencia = 0, presenciaCruda = 0, siluetaX = 0.5, siluetaXCruda = 0.5
+  let vision = null, fileset = null
+  // Un worker por modelo: { w, ocupado, cargando, delegado, n, ms }. n cuenta resultados y
+  // ms es lo que tardó el último, de que se pidió el cuadro a que llegó la respuesta.
+  const trabajos = { manos: { w: null }, silueta: { w: null } }
+  let presencia = 0, siluetaX = 0.5
   // Las dos manos, ya suavizadas. `ve` es si el último cuadro la encontró.
   const palmas = [{ x: 0.5, y: 0.5, ve: false }, { x: 0.5, y: 0.5, ve: false }]
   let crudas = []
@@ -95,55 +102,70 @@ export function crearLector ({ delegados = ['GPU', 'CPU'], umbral = 0.45 } = {})
     throw error
   }
 
-  // Manos y silueta corren cada una en su worker: el modelo de manos tarda unos 60 ms por
-  // cuadro, y en este hilo frenaba el dibujo. Un cuadro a la vez por worker: mientras
-  // piensa, no se le manda otro. `nombre` sólo sirve para los avisos.
-  function abrirWorker (archivo, modelo, nombre, alResultado, alError) {
+  // Abre el worker de un modelo. Resuelve cuando el modelo cargó, con el delegado que quedó.
+  function abrirWorker (cual, archivo, modelo, nombre, alResultado) {
+    const t = trabajos[cual]
     return new Promise((resolver, fallar) => {
       const w = new Worker(new URL(archivo, import.meta.url), { type: 'module' })
       let listo = false
       w.onmessage = ({ data }) => {
-        if (data.tipo === 'listo') { listo = true; resolver(w) }
+        if (data.tipo === 'listo') { listo = true; t.w = w; t.delegado = data.delegado; t.n = 0; resolver(data.delegado) }
+        else if (data.tipo === 'delegado') { t.delegado = data.delegado; console.info(`${nombre}: ahora en ${data.delegado}`); lector.alCambiarDelegado?.(cual, data.delegado) }
         else if (data.tipo === 'error') {
-          alError()
+          t.ocupado = false
           if (!listo) { w.terminate(); fallar(new Error(`no se pudo cargar el modelo de ${nombre}: ` + data.mensaje)) }
-          else console.warn(nombre + ':', data.mensaje)
-        } else alResultado(data)
+          else { console.warn(nombre + ':', data.mensaje); siguiente(cual) }
+        } else {
+          t.ms = performance.now() - t.pedido
+          t.n++
+          t.ocupado = false
+          alResultado(data)
+          siguiente(cual)
+        }
       }
       w.onerror = (e) => { w.terminate(); fallar(new Error(`no se pudo abrir el detector de ${nombre}: ` + (e.message || e))) }
-      w.postMessage({ tipo: 'cargar', mp: MP, modelo })
+      w.postMessage({ tipo: 'cargar', mp: MP, modelo, delegados: ['GPU', 'CPU'] })
     })
   }
 
-  function crearManos () {
-    return abrirWorker('./manos-worker.js', MODELO_MANOS, 'manos',
-      (data) => { ocupado = false; if (lector.conManos) ubicarManos(data) },
-      () => { ocupado = false })
-      .then(w => { manos = w })
+  const activo = (cual) => cual === 'manos' ? lector.conManos : lector.conSilueta
+
+  // Manda el cuadro actual al worker, a 320 pixeles de ancho: los modelos miran a unos 200
+  // por dentro, así que no se pierde nada y se copia una cuarta parte. Uno a la vez.
+  function pedir (cual) {
+    const t = trabajos[cual], v = lector.video
+    if (!t.w || t.ocupado || !activo(cual) || !v || v.readyState < 2 || !v.videoWidth) return
+    t.ocupado = true
+    t.cuadro = cuadros
+    t.pedido = performance.now()
+    const an = 320, al = Math.round(an * v.videoHeight / v.videoWidth)
+    createImageBitmap(v, { resizeWidth: an, resizeHeight: al, resizeQuality: 'low' })
+      .then(img => { if (t.w) t.w.postMessage({ tipo: 'cuadro', img, t: performance.now() }, [img]); else { img.close(); t.ocupado = false } })
+      .catch(() => { t.ocupado = false })
   }
 
-  function crearSilueta () {
-    return abrirWorker('./silueta-worker.js', MODELO_SILUETA, 'silueta',
-      (data) => {
-        ocupadaSilueta = false
-        if (!lector.conSilueta) return
-        lector.mascara = { bytes: data.bytes, w: data.w, h: data.h, n: (lector.mascara?.n || 0) + 1 }
-        presenciaCruda = data.presencia
-        if (data.presencia > 0.02) siluetaXCruda = 1 - data.x
-      },
-      () => { ocupadaSilueta = false })
-      .then(w => { segmentador = w })
+  // Al llegar un resultado se pide el siguiente cuadro sin esperar al bucle de la página
+  // (que va a 20 Hz): si la cámara ya dio uno que el modelo no vio, de inmediato; si no, en
+  // cuanto llegue (cuadros cuenta los de la cámara). El modelo marca el ritmo.
+  let cuadros = 0, contando = null
+  function contarCuadros (v) {
+    if (contando === v || !v.requestVideoFrameCallback) return
+    contando = v
+    const otro = () => { if (contando !== v) return; cuadros++; esperando.splice(0).forEach(pedir); v.requestVideoFrameCallback(otro) }
+    v.requestVideoFrameCallback(otro)
   }
-
-  // Un ImageBitmap por worker: se transfiere, así que cada uno necesita el suyo.
-  function mandarCuadro (video, w, alFallar) {
-    createImageBitmap(video)
-      .then(img => { if (w()) w().postMessage({ tipo: 'cuadro', img, t: performance.now() }, [img]); else { img.close(); alFallar() } })
-      .catch(alFallar)
+  const esperando = []
+  function siguiente (cual) {
+    const v = lector.video
+    if (!v || !v.requestVideoFrameCallback) return setTimeout(() => pedir(cual), 0)
+    contarCuadros(v)
+    if (cuadros > (trabajos[cual].cuadro ?? -1)) pedir(cual)
+    else if (!esperando.includes(cual)) esperando.push(cual)
   }
 
   // Las palmas del cuadro, en espejo y con y hacia arriba. Con dos, cada una va a la ranura
-  // que tenía más cerca, para que `mano` y `mano2` no se intercambien a cada cuadro.
+  // que tenía más cerca, para que `mano` y `mano2` no se intercambien a cada cuadro. Se
+  // publican en cuanto llegan (lector.alLlegar), con un suavizado ligero.
   function ubicarManos (r) {
     crudas = (r.landmarks || []).map(l => ({ x: 1 - l[PALMA].x, y: 1 - l[PALMA].y }))
     const d = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2
@@ -151,28 +173,67 @@ export function crearLector ({ delegados = ['GPU', 'CPU'], umbral = 0.45 } = {})
     if (crudas.length === 2 && d(crudas[0], palmas[1]) + d(crudas[1], palmas[0]) < d(crudas[0], palmas[0]) + d(crudas[1], palmas[1])) {
       orden = [crudas[1], crudas[0]]
     }
-    palmas.forEach((p, i) => { p.ve = !!orden[i]; p.meta = orden[i] })
+    const nuevos = {}
+    palmas.forEach((p, i) => {
+      const o = orden[i]
+      if (o) {
+        if (!p.ve) { p.x = o.x; p.y = o.y }   // recién aparece: sin arrastrarla desde donde estaba
+        else { p.x += (o.x - p.x) * 0.7; p.y += (o.y - p.y) * 0.7 }
+      }
+      p.ve = !!o
+      const n = i ? 'mano2' : 'mano'
+      nuevos[n] = p.ve ? 1 : 0
+      nuevos[n + '_x'] = Math.min(1, Math.max(0, p.x))
+      nuevos[n + '_y'] = Math.min(1, Math.max(0, p.y))
+    })
+    Object.assign(valores, nuevos)
+    lector.alLlegar?.(nuevos)
+  }
+
+  function ubicarSilueta (data) {
+    lector.mascara = { bytes: data.bytes, w: data.w, h: data.h, n: (lector.mascara?.n || 0) + 1 }
+    presencia += (data.presencia - presencia) * 0.6
+    if (data.presencia > 0.02) siluetaX += (1 - data.x - siluetaX) * 0.6
+    const nuevos = { presencia, silueta_x: Math.min(1, Math.max(0, siluetaX)) }
+    Object.assign(valores, nuevos)
+    lector.alLlegar?.(nuevos, lector.mascara)
+  }
+
+  function cargarTrabajo (cual, archivo, modelo, nombre, alResultado) {
+    const t = trabajos[cual]
+    if (!t.cargando) t.cargando = bajarVision().then(() => abrirWorker(cual, archivo, modelo, nombre, alResultado)).catch(e => { t.cargando = null; throw e })
+    return t.cargando
+  }
+
+  function cerrarTrabajo (cual) {
+    const t = trabajos[cual]
+    t.w?.terminate()
+    trabajos[cual] = { w: null }
   }
 
   const lector = {
     umbral,
     valores,
-    caja: null,   // la cara más grande del último cuadro, en pixeles del video
-    // Los puntos de las manos del último cuadro, de 0 a 1 en espejo, para la miniatura.
-    get manos () { return lector.conManos ? crudas : [] },
+    video: null,     // la cámara: la pone leer()
+    alLlegar: null,  // (lecturas, mascara?) => …: manos y silueta, en cuanto llegan
+    alCambiarDelegado: null,   // (cual, delegado) => …: un worker pasó de GPU a CPU
+    caja: null,      // la cara más grande del último cuadro, en pixeles del video
+    conCara: false,
     conManos: false,
-    get listo () { return !!detector },
     conSilueta: false,
     mascara: null,   // { bytes, w, h, n }: la última máscara, n cuenta las que llegaron
-
-    cargarSilueta () {
-      if (!cargandoSilueta) cargandoSilueta = crearSilueta().catch(e => { cargandoSilueta = null; throw e })
-      return cargandoSilueta
-    },
+    // Los puntos de las manos del último cuadro, de 0 a 1 en espejo, para la miniatura.
+    get manos () { return lector.conManos ? crudas : [] },
+    get listo () { return !!detector || !!trabajos.manos.w || !!trabajos.silueta.w },
+    // Para medir: resultados, ms del último y delegado de cada worker.
+    get trabajos () { return Object.fromEntries(Object.entries(trabajos).map(([k, t]) => [k, { n: t.n || 0, ms: t.ms, delegado: t.delegado }])) },
 
     cargarManos () {
-      if (!cargandoManos) cargandoManos = crearManos().catch(e => { cargandoManos = null; throw e })
-      return cargandoManos
+      return cargarTrabajo('manos', './manos-worker.js', MODELO_MANOS, 'manos', (data) => { if (lector.conManos) ubicarManos(data) })
+    },
+
+    cargarSilueta () {
+      return cargarTrabajo('silueta', './silueta-worker.js', MODELO_SILUETA, 'silueta', (data) => { if (lector.conSilueta) ubicarSilueta(data) })
     },
 
     // Una sola carga aunque se pida dos veces: la promesa se comparte, y si falla se
@@ -182,63 +243,56 @@ export function crearLector ({ delegados = ['GPU', 'CPU'], umbral = 0.45 } = {})
       return cargando
     },
 
-    // Llamar en cada vuelta del bucle, haya o no cuadro nuevo: sin cara, la cercanía
-    // baja suave hasta 0.
+    // Llamar en cada vuelta del bucle de la cámara, haya o no cuadro nuevo: sin cara, la
+    // cercanía baja suave hasta 0. Manos y silueta van por su lado; aquí sólo se les da el
+    // empujón inicial (pedir no hace nada si ya están trabajando).
     leer (video, ahora = performance.now()) {
       const dt = Math.min(0.1, (ahora - antes) / 1000)
       antes = ahora
-      const listo = detector && video.readyState >= 2
-      if (listo && video.currentTime !== ultimo) {
+      lector.video = video
+      const vivo = video.readyState >= 2
+      pedir('manos')
+      pedir('silueta')
+      if (!vivo || !lector.conManos) {
+        crudas = []
+        palmas.forEach(p => { p.ve = false })
+        valores.mano = valores.mano2 = 0
+      }
+      if (!vivo || !lector.conSilueta) { lector.mascara = null; presencia = 0; valores.presencia = 0 }
+
+      const conCara = lector.conCara && detector && vivo
+      if (conCara && video.currentTime !== ultimo) {
         ultimo = video.currentTime
         const r = detector.detectForVideo(video, performance.now())
         lector.caja = r.detections.map(d => d.boundingBox).sort((a, b) => b.width - a.width)[0] || null
         movCrudo = diferencia(video)
       }
-      if (listo && manos && lector.conManos && !ocupado) { ocupado = true; mandarCuadro(video, () => manos, () => { ocupado = false }) }
-      if (listo && segmentador && lector.conSilueta && !ocupadaSilueta) { ocupadaSilueta = true; mandarCuadro(video, () => segmentador, () => { ocupadaSilueta = false }) }
-      if (!listo || !lector.conSilueta) { presenciaCruda = 0; lector.mascara = null }
-      if (!listo || !lector.conManos) { crudas = []; palmas.forEach(p => { p.ve = false }) }
-      if (!listo) { movCrudo = 0; anterior = null }
-      const medida = listo && lector.caja ? Math.min(1, lector.caja.width / video.videoWidth / 0.5) : 0
+      if (!conCara) { movCrudo = 0; anterior = null; lector.caja = null }
+      const medida = conCara && lector.caja ? Math.min(1, lector.caja.width / video.videoWidth / 0.5) : 0
       // apenas suavizado: el sensor crudo tiembla. La rampa de verdad la pone cada quad.
       const k = 1 - Math.pow(0.5, dt * 60)
       crudo += (medida - crudo) * k
       // En espejo, como la miniatura: quien se mueve a su derecha ve el punto ir a la derecha.
-      if (listo && lector.caja) x += (1 - (lector.caja.originX + lector.caja.width / 2) / video.videoWidth - x) * k
+      if (conCara && lector.caja) x += (1 - (lector.caja.originX + lector.caja.width / 2) / video.videoWidth - x) * k
       mov += (movCrudo - mov) * (1 - Math.pow(0.5, dt * 15))
       valores.cercania = crudo
       valores.cerca = crudo > lector.umbral ? 1 : 0
       valores.cara_x = Math.min(1, Math.max(0, x))
       valores.movimiento = mov
-      presencia += (presenciaCruda - presencia) * k
-      siluetaX += (siluetaXCruda - siluetaX) * k
-      valores.presencia = presencia
-      valores.silueta_x = Math.min(1, Math.max(0, siluetaX))
-      palmas.forEach((p, i) => {
-        if (p.ve && p.meta) { p.x += (p.meta.x - p.x) * k; p.y += (p.meta.y - p.y) * k }
-        const n = i ? 'mano2' : 'mano'
-        valores[n] = p.ve ? 1 : 0
-        valores[n + '_x'] = Math.min(1, Math.max(0, p.x))
-        valores[n + '_y'] = Math.min(1, Math.max(0, p.y))
-      })
       return valores
     },
 
     cerrar () {
       detector?.close?.()
       detector = null
-      manos?.terminate()
-      manos = null
-      ocupado = false
-      segmentador?.terminate()
-      segmentador = null
-      cargandoSilueta = null
-      ocupadaSilueta = false
-      lector.conSilueta = false
-      lector.mascara = null
-      cargandoManos = null
-      lector.conManos = false
       cargando = null
+      cerrarTrabajo('manos')
+      cerrarTrabajo('silueta')
+      lector.conCara = lector.conManos = lector.conSilueta = false
+      lector.mascara = null
+      lector.video = null
+      contando = null
+      esperando.length = 0
       anterior = null
     },
   }

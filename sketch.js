@@ -970,7 +970,7 @@ setInterval(() => {
 const INTERACCION_HZ = 20;
 const interaccion = {
   mouse: false, xy: { x: 0.5, y: 0.5 },
-  camara: false, lector: null, video: null, cuadroUltimo: 0, manos: false, silueta: false,
+  camara: false, cara: false, lector: null, video: null, cuadroUltimo: 0, manos: false, silueta: false,
   volumen: 0, micBuffer: null,
 };
 
@@ -1075,10 +1075,47 @@ function avisarCamara(texto, error = false) {
   el.className = texto ? (error ? 'status-error' : 'status-ok') : '';
 }
 
-// Una cámara propia a 640×480, fuera del DOM, aunque un quad ya use la suya: pedirla dos
-// veces funciona en Chrome y Firefox. Delegate CPU (ver interaccion.js).
+// El botón cámara es la cara (cercania, cerca, cara_x, movimiento). Manos y silueta también
+// encienden la cámara, pero sin la cara: el detector de caras corre en este hilo (unos
+// 10 ms por cuadro) y no hace falta si nadie lo usa. Con la cámara ya encendida por ellas,
+// el botón sólo suma o quita la cara.
 async function toggleCamaraSensor() {
-  if (interaccion.camara) return detenerCamaraSensor();
+  if (interaccion.camara && interaccion.cara) {
+    return (interaccion.manos || interaccion.silueta) ? apagarCara() : detenerCamaraSensor();
+  }
+  if (interaccion.camara) return encenderCara();
+  await abrirCamaraSensor(true);
+}
+
+async function encenderCara() {
+  const btn = document.getElementById('sensor-camara-btn');
+  btn.disabled = true;
+  try {
+    avisarCamara('cargando el detector de caras…');
+    await interaccion.lector.cargar();
+    if (!interaccion.camara) return;
+    interaccion.lector.conCara = true;
+    interaccion.cara = true;
+    btn.classList.add('active');
+    avisarCamara('');
+  } catch (e) {
+    console.error(e);
+    avisarCamara('no se pudo: ' + (e.message || e), true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function apagarCara() {
+  interaccion.cara = false;
+  if (interaccion.lector) interaccion.lector.conCara = false;
+  document.getElementById('sensor-camara-btn')?.classList.remove('active');
+  publicarLecturas({ cercania: 0, cerca: 0, movimiento: 0 });
+}
+
+// Una cámara propia a 640×480, fuera del DOM, aunque un quad ya use la suya: pedirla dos
+// veces funciona en Chrome y Firefox. Delegate CPU para la cara (ver interaccion.js).
+async function abrirCamaraSensor(conCara) {
   const btn = document.getElementById('sensor-camara-btn');
   btn.disabled = true;
   try {
@@ -1087,6 +1124,12 @@ async function toggleCamaraSensor() {
       const { crearLector } = await import('./interaccion.js');
       interaccion.lector = crearLector({ delegados: ['CPU'] });
       interaccion.lector.umbral = parseFloat(document.getElementById('sensor-umbral').value);
+      // Manos y silueta, en cuanto llegan: sin esperar al intervalo de 20 Hz.
+      interaccion.lector.alLlegar = (lecturas, mascara) => {
+        if (mascara && interaccion.silueta) pintarSilueta(mascara);
+        publicarLecturas(lecturas);
+      };
+      interaccion.lector.alCambiarDelegado = (cual, delegado) => avisarCamara(`${cual} · en la ${delegado}: la GPU iba más lenta`);
     }
     avisarCamara('esperando el permiso de la cámara…');
     const video = document.createElement('video');
@@ -1095,10 +1138,12 @@ async function toggleCamaraSensor() {
     video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
     await video.play();
     interaccion.video = video;
-    await interaccion.lector.cargar();
+    if (conCara) await interaccion.lector.cargar();
     if (interaccion.video !== video) return;   // se apagó mientras cargaba
     interaccion.camara = true;
-    btn.classList.add('active');
+    interaccion.cara = !!conCara;
+    interaccion.lector.conCara = !!conCara;
+    btn.classList.toggle('active', !!conCara);
     document.getElementById('sensor-camara').hidden = false;
     marcarPestanaInteraccion();
     avisarCamara('');
@@ -1116,6 +1161,8 @@ async function toggleCamaraSensor() {
 
 function detenerCamaraSensor() {
   const estaba = interaccion.camara;
+  interaccion.cara = false;
+  if (interaccion.lector) interaccion.lector.conCara = false;
   if (interaccion.manos) apagarManos();
   if (interaccion.silueta) apagarSilueta();
   interaccion.video?.srcObject?.getTracks().forEach(t => t.stop());
@@ -1134,17 +1181,17 @@ function detenerCamaraSensor() {
 async function toggleManosSensor() {
   if (interaccion.manos) return apagarManos();
   const btn = document.getElementById('sensor-manos-btn');
-  if (!interaccion.camara) await toggleCamaraSensor();
+  if (!interaccion.camara) await abrirCamaraSensor(false);
   if (!interaccion.camara) return;
   btn.disabled = true;
   try {
     avisarCamara('cargando el modelo de manos…');
-    await interaccion.lector.cargarManos();
+    const delegado = await interaccion.lector.cargarManos();
     if (!interaccion.camara) return;
     interaccion.lector.conManos = true;
     interaccion.manos = true;
     btn.classList.add('active');
-    avisarCamara('');
+    avisarCamara(`manos · ${delegado === 'GPU' ? 'en la GPU' : 'en la CPU'}`);
   } catch (e) {
     console.error(e);
     avisarCamara(e.message || String(e), true);
@@ -1207,18 +1254,18 @@ function pintarSilueta(m) {
 async function toggleSiluetaSensor() {
   if (interaccion.silueta) return apagarSilueta();
   const btn = document.getElementById('sensor-silueta-btn');
-  if (!interaccion.camara) await toggleCamaraSensor();
+  if (!interaccion.camara) await abrirCamaraSensor(false);
   if (!interaccion.camara) return;
   btn.disabled = true;
   try {
     avisarCamara('cargando el modelo de silueta…');
-    await interaccion.lector.cargarSilueta();
+    const delegado = await interaccion.lector.cargarSilueta();
     if (!interaccion.camara) return;
     interaccion.lector.conSilueta = true;
     interaccion.silueta = true;
     if (!siluetaStream && silueta.captureStream) siluetaStream = silueta.captureStream(INTERACCION_HZ);
     btn.classList.add('active');
-    avisarCamara('');
+    avisarCamara(`silueta · ${delegado === 'GPU' ? 'en la GPU' : 'en la CPU'}`);
   } catch (e) {
     console.error(e);
     avisarCamara(e.message || String(e), true);
@@ -1278,7 +1325,6 @@ function cuadroCamara(video) {
   if (ahora - interaccion.cuadroUltimo < 1000 / INTERACCION_HZ) return otra();
   interaccion.cuadroUltimo = ahora;
   interaccion.lector.leer(video, ahora);
-  if (interaccion.silueta) pintarSilueta(interaccion.lector.mascara);
   const ui = document.getElementById('ui');
   if (uiVisible && !ui.classList.contains('collapsed') && pestanaActiva === 'interaccion') pintarVistaCamara(video, interaccion.lector);
   otra();
@@ -1644,7 +1690,7 @@ let equipos = null;   // { grupo, lista, elegido }
 const FUENTES_NOMBRE = { camara: 'cámara', manos: 'manos', silueta: 'silueta', mic: 'mic', mouse: 'mouse' };
 
 function fuenteEncendida(f) {
-  return f === 'camara' ? interaccion.camara : f === 'manos' ? interaccion.manos : f === 'silueta' ? interaccion.silueta : f === 'mic' ? micActive : f === 'mouse' ? interaccion.mouse : false;
+  return f === 'camara' ? interaccion.camara && interaccion.cara : f === 'manos' ? interaccion.manos : f === 'silueta' ? interaccion.silueta : f === 'mic' ? micActive : f === 'mouse' ? interaccion.mouse : false;
 }
 
 async function iniciarEquipos() {
