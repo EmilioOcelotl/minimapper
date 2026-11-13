@@ -110,6 +110,12 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('toggle-btn').classList.add('presentation');
   document.getElementById('info-btn').classList.remove('visible');
   loadFromLocalStorage();
+  if (!SALIDA) {
+    pistas.forEach(p => { if (p.url) prepararAudioPista(p, p.url); });
+    renderPistas();
+    renderEscenaSenal();
+    iniciarEquipos();
+  }
   if (SALIDA) {
     document.body.classList.add('salida');
     // La salida no tiene botones, y F11 en Windows a veces no responde (Fn+F11 duerme el
@@ -232,7 +238,9 @@ function saveSession() {
     })),
     currentSceneIndex,
     playbackMode,
-    montaje
+    montaje,
+    pistas: pistasParaGuardar(),
+    escenaSenal
   };
   const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -276,7 +284,9 @@ function normalizeSession(session) {
       })),
       currentSceneIndex: session.currentSceneIndex || 0,
       playbackMode: session.playbackMode || 'once',
-      montaje: session.montaje
+      montaje: session.montaje,
+      pistas: session.pistas,
+      escenaSenal: session.escenaSenal
     };
   }
   return {
@@ -298,6 +308,9 @@ function applySession(session) {
   playbackMode = normalized.playbackMode;
   // Una sesión sin montaje (anterior a las dos salidas) deja el que hay.
   if (normalized.montaje) { montaje = normalizarMontaje(normalized.montaje); aplicarResolucionHydra(); renderMontaje(); }
+  // Igual con el sonido y la escena por señal: una sesión sin ellos deja lo que hay.
+  if (normalized.pistas) reemplazarPistas(normalized.pistas);
+  if (normalized.escenaSenal) { escenaSenal = normalizarEscenaSenal(normalized.escenaSenal); renderEscenaSenal(); }
   // Las capturas que estaban aparcadas en las escenas que esta sesión reemplaza no las
   // alcanzó el clearQuadSource() de arriba, que sólo tocó los quads vivos.
   releaseScreenSources(dropped);
@@ -365,7 +378,9 @@ function saveToLocalStorage() {
       scenes: scenes.map(s => ({ id: s.id, duration_s: s.duration_s, hydraCode: s.hydraCode || '', quads: serializableQuads(s.quads) })),
       currentSceneIndex,
       playbackMode,
-      montaje
+      montaje,
+      pistas: pistasParaGuardar(),
+      escenaSenal
     };
     localStorage.setItem("minimapper_config", JSON.stringify(config));
   } catch (e) {
@@ -379,6 +394,8 @@ function loadFromLocalStorage() {
     if (!saved) { renderSceneStrip(); return; }
     const config = JSON.parse(saved);
     montaje = normalizarMontaje(config.montaje);
+    pistas = normalizarPistas(config.pistas);
+    escenaSenal = normalizarEscenaSenal(config.escenaSenal);
 
     if (config.scenes && config.scenes.length > 0) {
       scenes = config.scenes.map(s => ({
@@ -449,7 +466,7 @@ const UNDO_LIMIT = 20;
 
 function pushUndo() {
   // El color entra al snapshot sin la rampa en curso: es estado, no decisión.
-  const color = (q) => { if (!q.color) return null; const { rampa, ...c } = q.color; return c; };
+  const color = (q) => { if (!q.color) return null; const { rampa, _rampa, ...c } = q.color; return c; };
   undoStack.push(quads.map(q =>
     q.kind === 'freeform'
       ? { kind: 'freeform', data: q.vertices.map(v => ({ x: v.x, y: v.y })), color: color(q) }
@@ -722,7 +739,8 @@ function tinteRGB(hex) {
 function colorParaGuardar(c) {
   if (colorEsNeutro(c)) return null;
   const out = { nivel: c.nivel, saturacion: c.saturacion, tinte: c.tinte };
-  if (c.senal) Object.assign(out, { senal: c.senal, destino: c.destino || 'nivel', invertir: !!c.invertir });
+  if (c.senal) Object.assign(out, { senal: c.senal, destino: c.destino || 'nivel', invertir: !!c.invertir,
+                                    subida: c.subida || 0, bajada: c.bajada || 0 });
   return out;
 }
 
@@ -730,7 +748,7 @@ function setQuadColor(index, campo, valor) {
   const c = quadColor(quads[index]);
   c[campo] = campo === 'tinte' ? valor : parseFloat(valor);
   const out = document.getElementById(`color-${campo}-${index}`);
-  if (out && campo !== 'tinte') out.textContent = c[campo].toFixed(2);
+  if (out && campo !== 'tinte') out.textContent = RAMPA_CAMPOS.includes(campo) ? segundos(c[campo]) : c[campo].toFixed(2);
   publicarEstado();   // la salida sigue el deslizador, no sólo al soltarlo
 }
 
@@ -794,7 +812,7 @@ function toggleQuadInvertir(index) {
 // Arranca con todas en 0: así un sketch con () => sensor.cercania funciona aunque no haya
 // nada encendido, y la lista no se redibuja al llegar la primera.
 // `x` e `y` las publica el recuadro de la sección "interacción" (ver INTERACCIÓN, abajo).
-var sensor = { cercania: 0, cerca: 0, x: 0, y: 0 };
+var sensor = { cercania: 0, cerca: 0, cara_x: 0, movimiento: 0, volumen: 0, x: 0, y: 0 };
 let sensorUltimo = 0;
 const SENSOR_CANAL = 'minimapper-lecturas';
 let canalSensor = null;
@@ -812,7 +830,7 @@ function recibirLecturas(lecturas) {
   }
   sensorUltimo = performance.now();
   // Una lectura nueva aparece en los selectores de señal de cada quad.
-  if (nuevas && typeof renderQuadList === 'function') renderQuadList();
+  if (nuevas && typeof renderQuadList === 'function') { renderQuadList(); renderEscenaSenal(); renderPistas(); }
 }
 
 try {
@@ -826,9 +844,39 @@ function sensorVivo() {
   return performance.now() - sensorUltimo < 1500;
 }
 
-// Lo que sale del quad: los valores manuales o, si hay señal, el destino por la lectura.
-// Sin suavizado: subida y bajada se quitaron mientras se decide cómo darles forma
-// (una envolvente gráfica). Con una lectura de 0/1 (un evento) el cambio es en seco.
+// --- RAMPA ---
+// Una rampa lineal: el valor camina hacia la meta y tarda `subida` segundos en ir de 0 a 1
+// y `bajada` en volver. Con 0 s el cambio es en seco. `estado` guarda { v, t } entre
+// llamadas, así que sirve igual para un quad, una pista o Hydra.
+const RAMPA_CAMPOS = ['subida', 'bajada'];
+const segundos = (v) => (v || 0).toFixed(1) + ' s';
+
+function pasoRampa(estado, meta, subida, bajada) {
+  const ahora = performance.now();
+  const dt = estado.t == null ? 0 : Math.min(0.5, (ahora - estado.t) / 1000);
+  estado.t = ahora;
+  if (estado.v == null) estado.v = meta;
+  const tiempo = meta > estado.v ? subida : bajada;
+  if (!(tiempo > 0)) estado.v = meta;
+  else {
+    const paso = dt / tiempo;
+    estado.v = meta > estado.v ? Math.min(meta, estado.v + paso) : Math.max(meta, estado.v - paso);
+  }
+  return estado.v;
+}
+
+// Para Hydra: () => rampa('cercania', 3) sube en 3 s y baja en 3 s; con un tercer número,
+// la bajada es otra: rampa('cercania', 0.5, 4). Cada combinación lleva su propio estado.
+const rampasHydra = {};
+function rampa(nombre, subida = 1, bajada = subida) {
+  const clave = nombre + '|' + subida + '|' + bajada;
+  const estado = rampasHydra[clave] || (rampasHydra[clave] = {});
+  const meta = sensorVivo() ? (sensor[nombre] ?? 0) : 0;
+  return pasoRampa(estado, meta, subida, bajada);
+}
+
+// Lo que sale del quad: los valores manuales o, si hay señal, el destino por la lectura,
+// con la rampa del quad (subida y bajada, en segundos; 0 = de golpe).
 // El deslizador del destino marca el máximo: nivel y saturación se multiplican por la
 // lectura (0 = negro, 0 = gris); el tinte va de blanco (sin teñir) al color elegido.
 function colorEfectivo(c) {
@@ -836,7 +884,8 @@ function colorEfectivo(c) {
   if (!c.senal) return { nivel: c.nivel, saturacion: c.saturacion, tinte };
   let meta = sensorVivo() ? (sensor[c.senal] ?? 0) : 0;
   if (c.invertir) meta = 1 - meta;
-  c.rampa = meta;
+  if (!c._rampa) c._rampa = {};
+  c.rampa = pasoRampa(c._rampa, meta, c.subida || 0, c.bajada || 0);
   const destino = c.destino || 'nivel';
   return {
     nivel: destino === 'nivel' ? c.nivel * c.rampa : c.nivel,
@@ -853,29 +902,61 @@ setInterval(() => {
   el.classList.toggle('vivo', vivo);
   el.textContent = vivo
     ? 'señal · ' + claves.map(k => `${k} ${sensor[k].toFixed(2)}`).join(' · ')
-    : (sensorUltimo ? 'señal · ninguna' : 'señal · enciende el mouse o la cámara');
+    : (sensorUltimo ? 'señal · ninguna' : 'señal · enciende el mouse, la cámara o el mic');
   quads.forEach((q, i) => {
     const out = document.getElementById(`color-rampa-${i}`);
     if (out && q.color && q.color.senal) out.textContent = (q.color.rampa ?? 0).toFixed(2);
   });
+  pintarPistas();
+  pintarEquipo();
 }, 200);
 
 // --- INTERACCIÓN: LECTURAS HECHAS EN ESTE PANEL ---
-// Dos fuentes, cada una con su botón: el mouse sobre un recuadro (`x`, `y`) y la cámara
-// con un detector de caras (`cercania`, `cerca`, ver interaccion.js). Las dos entran por
-// recibirLecturas() y salen por el canal hacia la salida, que las aplica igual. Nada de esto corre si no se enciende: el detector se
-// baja con import() al encender la cámara, y en presentación la miniatura no se dibuja.
-// Al apagar una fuente sus lecturas bajan a 0.
+// Tres fuentes, cada una con su botón: el mouse sobre un recuadro (`x`, `y`), la cámara
+// con un detector de caras y la diferencia entre cuadros (`cercania`, `cerca`, `cara_x`,
+// `movimiento`, ver interaccion.js) y el micrófono (`volumen`). Entran por
+// recibirLecturas() y salen por el canal hacia la salida, que las aplica igual. Nada de
+// esto corre si no se enciende: el detector se baja con import() al encender la cámara, y
+// en presentación la miniatura no se dibuja. Al apagar una fuente sus lecturas bajan a 0.
+// El mic es el mismo del carrusel (micActive, initMic): encenderlo aquí también lo
+// enciende allá, y al revés.
 
 const INTERACCION_HZ = 20;
 const interaccion = {
   mouse: false, xy: { x: 0.5, y: 0.5 },
   camara: false, lector: null, video: null, cuadroUltimo: 0,
+  volumen: 0, micBuffer: null,
 };
 
 // El punto verde en la pestaña: hay una fuente encendida aunque se esté en otra pestaña.
 function marcarPestanaInteraccion() {
-  document.querySelector('#pestanas [data-pestana="interaccion"]')?.classList.toggle('encendida', interaccion.mouse || interaccion.camara);
+  document.querySelector('#pestanas [data-pestana="interaccion"]')?.classList.toggle('encendida', interaccion.mouse || interaccion.camara || micActive);
+}
+
+// El volumen del mic: el RMS por la ganancia, de 0 a 1. Sube de inmediato y baja en
+// unos 0.3 s, para que un aplauso no sea un parpadeo de un cuadro.
+function leerVolumen() {
+  if (!micActive || !micAnalyser) return 0;
+  if (!interaccion.micBuffer || interaccion.micBuffer.length !== micAnalyser.fftSize) interaccion.micBuffer = new Float32Array(micAnalyser.fftSize);
+  const b = interaccion.micBuffer;
+  micAnalyser.getFloatTimeDomainData(b);
+  let rms = 0;
+  for (let i = 0; i < b.length; i++) rms += b[i] * b[i];
+  rms = Math.sqrt(rms / b.length);
+  const ganancia = parseFloat(document.getElementById('sensor-ganancia')?.value) || 12;
+  const v = Math.min(1, rms * ganancia);
+  interaccion.volumen = v > interaccion.volumen ? v : Math.max(v, interaccion.volumen - 1 / (0.3 * INTERACCION_HZ));
+  const barra = document.querySelector('#sensor-medidor i');
+  if (barra) barra.style.width = (interaccion.volumen * 100) + '%';
+  return interaccion.volumen;
+}
+
+// Lo llaman initMic() y stopMic(), vengan del carrusel o de aquí.
+function micCambio() {
+  const caja = document.getElementById('sensor-mic');
+  if (caja) caja.hidden = !micActive;
+  if (!micActive) { interaccion.volumen = 0; publicarLecturas({ volumen: 0 }); }
+  marcarPestanaInteraccion();
 }
 
 function publicarLecturas(lecturas) {
@@ -884,11 +965,16 @@ function publicarLecturas(lecturas) {
 }
 
 setInterval(() => {
-  if (SALIDA || (!interaccion.mouse && !interaccion.camara)) return;
-  const v = {};
-  if (interaccion.mouse) Object.assign(v, interaccion.xy);
-  if (interaccion.camara && interaccion.lector?.listo) Object.assign(v, interaccion.lector.valores);
-  if (Object.keys(v).length) publicarLecturas(v);
+  if (SALIDA) return;
+  if (interaccion.mouse || interaccion.camara || micActive) {
+    const v = {};
+    if (interaccion.mouse) Object.assign(v, interaccion.xy);
+    if (interaccion.camara && interaccion.lector?.listo) Object.assign(v, interaccion.lector.valores);
+    if (micActive) v.volumen = leerVolumen();
+    if (Object.keys(v).length) publicarLecturas(v);
+  }
+  vigilarEscenaSenal();
+  avanzarPistas();
 }, 1000 / INTERACCION_HZ);
 
 // El recuadro: arrastrar dentro mueve el punto y el punto se queda donde se suelta.
@@ -984,7 +1070,7 @@ function detenerCamaraSensor() {
   document.getElementById('sensor-camara-btn')?.classList.remove('active');
   const caja = document.getElementById('sensor-camara');
   if (caja) caja.hidden = true;
-  if (estaba) publicarLecturas({ cercania: 0, cerca: 0 });
+  if (estaba) publicarLecturas(Object.fromEntries(Object.keys(interaccion.lector?.valores || { cercania: 0, cerca: 0 }).map(k => [k, 0])));
   marcarPestanaInteraccion();
 }
 
@@ -1023,6 +1109,376 @@ function pintarVistaCamara(video, lector) {
   ctx.restore();
 }
 
+// --- ESCENA POR SEÑAL ---
+// Una lectura que pasa el umbral lleva a la siguiente escena: "tocar el muro cambia de
+// animación". Vuelve a armarse cuando la lectura baja del 80 % del umbral, y entre dos
+// cambios espera ESCENA_ESPERA ms, para que una mano que se queda no pase todas las escenas.
+// En reproducción avanza como avanzaría el tiempo (advanceScene, con su modo); sin ella, a
+// la siguiente en orden. Sólo el editor decide: la salida sigue a la escena montada.
+const ESCENA_ESPERA = 2000;
+let escenaSenal = { senal: '', umbral: 0.5 };
+const escenaDisparo = { arriba: false, ultimo: 0 };
+
+function normalizarEscenaSenal(e) {
+  const umbral = parseFloat(e && e.umbral);
+  return { senal: (e && typeof e.senal === 'string') ? e.senal : '', umbral: umbral > 0 && umbral < 1 ? umbral : 0.5 };
+}
+
+function renderEscenaSenal() {
+  const el = document.getElementById('escena-senal');
+  if (!el || SALIDA) return;
+  const k = escenaSenal.senal;
+  el.innerHTML = `<div class="quad-color">
+      <label>señal<select onchange="setEscenaSenal('senal', this.value)">
+        <option value="" ${!k ? 'selected' : ''}>ninguna</option>
+        ${[...new Set([...Object.keys(sensor), ...(k ? [k] : [])])].map(n =>
+          `<option value="${n}" ${k === n ? 'selected' : ''}>${n}</option>`).join('')}
+      </select><output id="escena-senal-valor"></output></label>
+      ${k ? `<label>umbral<input type="range" min="0.05" max="0.95" step="0.01" value="${escenaSenal.umbral}"
+        oninput="setEscenaSenal('umbral', this.value)" onchange="saveToLocalStorage()"><output id="escena-senal-umbral">${escenaSenal.umbral.toFixed(2)}</output></label>` : ''}
+    </div>
+    <p class="montaje-nota">${k
+      ? `Cuando ${k} pasa del umbral, va a la siguiente escena. Espera ${ESCENA_ESPERA / 1000} s antes de poder cambiar otra vez.`
+      : 'Una lectura que pasa un umbral cambia de escena. Hacen falta dos escenas o más.'}</p>`;
+}
+
+function setEscenaSenal(campo, valor) {
+  if (campo === 'umbral') {
+    escenaSenal.umbral = parseFloat(valor);
+    const out = document.getElementById('escena-senal-umbral');
+    if (out) out.textContent = escenaSenal.umbral.toFixed(2);
+    return;
+  }
+  escenaSenal.senal = valor || '';
+  escenaDisparo.arriba = false;
+  renderEscenaSenal();
+  saveToLocalStorage();
+}
+
+function vigilarEscenaSenal() {
+  const k = escenaSenal.senal;
+  if (!k || !sensorVivo()) { escenaDisparo.arriba = false; return; }
+  const v = sensor[k] ?? 0;
+  const ahora = performance.now();
+  if (!escenaDisparo.arriba && v > escenaSenal.umbral && ahora - escenaDisparo.ultimo > ESCENA_ESPERA) {
+    escenaDisparo.arriba = true;
+    escenaDisparo.ultimo = ahora;
+    escenaSiguientePorSenal();
+  } else if (escenaDisparo.arriba && v < escenaSenal.umbral * 0.8) {
+    escenaDisparo.arriba = false;
+  }
+}
+
+function escenaSiguientePorSenal() {
+  if (scenes.length < 2) return;
+  if (isPlaying) { clearTimeout(playbackTimeout); advanceScene(); return; }
+  const next = (currentSceneIndex + 1) % scenes.length;
+  const fadeEl = document.getElementById('scene-fade');
+  fadeEl.classList.add('fading');
+  setTimeout(() => { switchScene(next); fadeEl.classList.remove('fading'); }, 350);
+}
+
+// --- SONIDO: PISTAS ---
+// Una pista es un archivo de audio o un enlace, con volumen, bucle y, si se quiere, una
+// señal que lo sube y lo baja con su rampa (subida y bajada en segundos). Sin señal suena
+// a su volumen, de principio a fin. Suena desde el editor, nunca desde la salida: las dos
+// ventanas están en la misma computadora y la salida duplicaría el sonido.
+// El volumen se mueve con el.volume, no con Web Audio: así un archivo de otro origen sin
+// CORS suena igual, y no hay un segundo AudioContext junto al del mic.
+// Las pistas son de toda la sesión, no de una escena. Se guardan como los quads: un enlace
+// http persiste; un archivo local no, y al recargar queda su nombre y hay que volver a cargarlo.
+// Arrancar exige un gesto (autoplay): sólo ▶ las hace sonar.
+let pistas = [];
+const PISTA_CAMPOS = ['id', 'nombre', 'url', 'volumen', 'senal', 'invertir', 'subida', 'bajada', 'bucle'];
+
+function normalizarPistas(lista) {
+  return (Array.isArray(lista) ? lista : []).map((p, i) => ({
+    id: p.id || i + 1,
+    nombre: typeof p.nombre === 'string' ? p.nombre : `pista ${i + 1}`,
+    url: typeof p.url === 'string' && p.url.startsWith('http') ? p.url : '',
+    volumen: isFinite(p.volumen) ? Math.min(1, Math.max(0, p.volumen)) : 1,
+    senal: typeof p.senal === 'string' ? p.senal : '',
+    invertir: !!p.invertir,
+    subida: isFinite(p.subida) ? p.subida : 1,
+    bajada: isFinite(p.bajada) ? p.bajada : 2,
+    bucle: p.bucle !== false,
+  }));
+}
+
+function pistasParaGuardar() {
+  return pistas.map(p => Object.fromEntries(PISTA_CAMPOS.map(k => [k, p[k]])));
+}
+
+// Al cargar una sesión: suelta lo que suena y abre los enlaces de las nuevas.
+function reemplazarPistas(lista) {
+  pistas.forEach(soltarAudioPista);
+  pistas = normalizarPistas(lista);
+  if (!SALIDA) pistas.forEach(p => { if (p.url) prepararAudioPista(p, p.url); });
+  renderPistas();
+}
+
+function soltarAudioPista(p) {
+  if (p.el) { p.el.pause(); p.el.removeAttribute('src'); p.el.load(); }
+  if (p.local) URL.revokeObjectURL(p.local);
+  p.el = null; p.local = null; p.sonando = false;
+}
+
+function prepararAudioPista(p, src) {
+  if (SALIDA) return;
+  if (p.el) { p.el.pause(); p.sonando = false; }
+  const el = new Audio();
+  el.preload = 'auto';
+  el.loop = p.bucle;
+  el.volume = 0;
+  el.onerror = () => { p.nota = { text: 'No se pudo abrir el audio. Revisa el enlace o usa Archivo.', ok: false }; p.sonando = false; renderPistas(); };
+  el.onended = () => { p.sonando = false; renderPistas(); };
+  el.src = src;
+  p.el = el;
+  p.estado = {};
+}
+
+function agregarPista() {
+  const id = pistas.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+  pistas.push(normalizarPistas([{ id, nombre: `pista ${id}` }])[0]);
+  pistas[pistas.length - 1].id = id;
+  renderPistas();
+  saveToLocalStorage();
+}
+
+function quitarPista(i) {
+  if (!pistas[i]) return;
+  soltarAudioPista(pistas[i]);
+  pistas.splice(i, 1);
+  renderPistas();
+  saveToLocalStorage();
+}
+
+function cargarArchivoPista(i) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'audio/*';
+  input.onchange = () => {
+    const f = input.files[0], p = pistas[i];
+    if (!f || !p) return;
+    if (p.local) URL.revokeObjectURL(p.local);
+    p.local = URL.createObjectURL(f);
+    p.nombre = f.name;
+    p.url = '';
+    p.nota = null;
+    prepararAudioPista(p, p.local);
+    renderPistas();
+    saveToLocalStorage();
+  };
+  input.click();
+}
+
+function cargarEnlacePista(i, raw) {
+  const p = pistas[i];
+  if (!p) return;
+  const res = normalizeSourceUrl(raw, 'audio');
+  if (!res.ok) p.nota = { text: res.note, ok: false };
+  else if (!res.url) return;
+  else if (res.url.startsWith('http://') && location.protocol === 'https:') {
+    p.nota = { text: 'El navegador bloquea un archivo http dentro de una página https. Busca la versión https o usa Archivo.', ok: false };
+  } else {
+    p.nota = res.note ? { text: res.note, ok: true } : null;
+    if (p.local) { URL.revokeObjectURL(p.local); p.local = null; }
+    p.url = res.url;
+    try { p.nombre = decodeURIComponent(new URL(res.url).pathname.split('/').filter(Boolean).pop() || p.nombre); } catch (e) {}
+    prepararAudioPista(p, res.url);
+    saveToLocalStorage();
+  }
+  renderPistas();
+}
+
+function tocarPista(i) {
+  const p = pistas[i];
+  if (!p) return;
+  if (!p.el) { p.nota = { text: p.nombre && !p.url ? `Vuelve a cargar ${p.nombre} con Archivo: un archivo local no se guarda.` : 'Primero carga un archivo o pega un enlace.', ok: false }; renderPistas(); return; }
+  if (p.sonando) {
+    p.el.pause();
+    p.el.currentTime = 0;
+    p.sonando = false;
+    renderPistas();
+    return;
+  }
+  p.estado = {};
+  p.el.loop = p.bucle;
+  p.el.volume = 0;
+  p.el.play().then(() => { p.sonando = true; p.nota = null; renderPistas(); })
+    .catch(e => { p.nota = { text: 'El navegador no la dejó sonar: ' + (e.message || e.name), ok: false }; renderPistas(); });
+}
+
+function setPista(i, campo, valor) {
+  const p = pistas[i];
+  if (!p) return;
+  if (campo === 'invertir' || campo === 'bucle') {
+    p[campo] = !p[campo];
+    if (campo === 'bucle' && p.el) p.el.loop = p.bucle;
+    renderPistas();
+    saveToLocalStorage();
+    return;
+  }
+  if (campo === 'senal') {
+    p.senal = valor || '';
+    p.estado = {};
+    renderPistas();
+    saveToLocalStorage();
+    return;
+  }
+  p[campo] = parseFloat(valor);
+  const out = document.getElementById(`pista-${campo}-${i}`);
+  if (out) out.textContent = RAMPA_CAMPOS.includes(campo) ? segundos(p[campo]) : p[campo].toFixed(2);
+}
+
+// A 20 Hz, desde el mismo intervalo que publica las lecturas.
+function avanzarPistas() {
+  for (const p of pistas) {
+    if (!p.el || !p.sonando) continue;
+    let meta = 1;
+    if (p.senal) {
+      meta = sensorVivo() ? (sensor[p.senal] ?? 0) : 0;
+      if (p.invertir) meta = 1 - meta;
+    }
+    p.nivel = pasoRampa(p.estado || (p.estado = {}), meta, p.subida, p.bajada);
+    p.el.volume = Math.min(1, Math.max(0, p.volumen * p.nivel));
+  }
+}
+
+function pintarPistas() {
+  pistas.forEach((p, i) => {
+    const out = document.getElementById(`pista-nivel-${i}`);
+    if (out) out.textContent = p.sonando ? (p.volumen * (p.nivel ?? 0)).toFixed(2) : '—';
+  });
+}
+
+function renderPistas() {
+  const el = document.getElementById('pistas');
+  if (!el || SALIDA) return;
+  const esc = (t) => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  el.innerHTML = pistas.map((p, i) => {
+    const k = p.senal;
+    return `<div class="quad-item pista${p.sonando ? ' sonando' : ''}">
+      <span class="quad-label" title="${esc(p.nombre)}">${esc(p.nombre)}</span>
+      <div class="quad-controls">
+        <button onclick="tocarPista(${i})" title="${p.sonando ? 'Parar y volver al principio' : 'Sonar'}">${p.sonando ? '■' : '▶'}</button>
+        <button onclick="cargarArchivoPista(${i})">Archivo</button>
+        <button onclick="quitarPista(${i})">✕</button>
+      </div>
+      <div class="quad-url-row">
+        <input type="text" class="quad-url-input" value="${esc(p.url)}" placeholder="o pega el enlace"
+          onkeydown="if(event.key==='Enter')cargarEnlacePista(${i},this.value)">
+        <button onclick="cargarEnlacePista(${i},this.parentElement.querySelector('input').value)">URL</button>
+      </div>
+      ${p.nota ? `<div class="quad-url-note ${p.nota.ok ? 'status-ok' : 'status-error'}">${esc(p.nota.text)}</div>` : ''}
+      <div class="quad-color">
+        <label title="El máximo: con señal, la lectura decide cuánto de este volumen suena">volumen<input type="range" min="0" max="1" step="0.01" value="${p.volumen}"
+          oninput="setPista(${i},'volumen',this.value)" onchange="saveToLocalStorage()"><output id="pista-volumen-${i}">${p.volumen.toFixed(2)}</output></label>
+        <label>señal<select onchange="setPista(${i},'senal',this.value)">
+          <option value="" ${!k ? 'selected' : ''}>siempre</option>
+          ${[...new Set([...Object.keys(sensor), ...(k ? [k] : [])])].map(n =>
+            `<option value="${n}" ${k === n ? 'selected' : ''}>${n}</option>`).join('')}
+        </select><output id="pista-nivel-${i}" title="lo que suena ahora">—</output></label>
+        ${k ? `<label>invertir<button class="${p.invertir ? 'activo' : ''}" onclick="setPista(${i},'invertir')">${p.invertir ? 'sí' : 'no'}</button><span></span></label>
+        ${RAMPA_CAMPOS.map(c => `<label title="${c === 'subida' ? 'Segundos para subir del silencio al volumen' : 'Segundos para volver al silencio'}. 0 = de golpe">${c}<input type="range" min="0" max="10" step="0.1" value="${p[c]}"
+          oninput="setPista(${i},'${c}',this.value)" onchange="saveToLocalStorage()"><output id="pista-${c}-${i}">${segundos(p[c])}</output></label>`).join('')}` : ''}
+        <label title="Al terminar vuelve a empezar">bucle<button class="${p.bucle ? 'activo' : ''}" onclick="setPista(${i},'bucle')">${p.bucle ? 'sí' : 'no'}</button><span></span></label>
+      </div>
+    </div>`;
+  }).join('') || '<p class="montaje-nota">Un archivo de audio o un enlace. Con una señal, el volumen sigue a la lectura; sin ella, suena siempre. Suena desde esta ventana: conecta aquí las bocinas.</p>';
+}
+
+// --- EQUIPOS ---
+// Una tarjeta por proyecto de un grupo: qué fuentes usa, sus lecturas en vivo y la receta
+// para armarlo con lo que hay en el panel. Los datos viven en equipos.js, aparte, y sólo
+// se bajan con ?equipos=<grupo>; el grupo se recuerda, y × lo olvida. Así la herramienta
+// pública no carga los proyectos de un salón.
+let equipos = null;   // { grupo, lista, elegido }
+const FUENTES_NOMBRE = { camara: 'cámara', mic: 'mic', mouse: 'mouse' };
+
+function fuenteEncendida(f) {
+  return f === 'camara' ? interaccion.camara : f === 'mic' ? micActive : f === 'mouse' ? interaccion.mouse : false;
+}
+
+async function iniciarEquipos() {
+  if (SALIDA) return;
+  const param = new URLSearchParams(location.search).get('equipos');
+  let grupo = param;
+  try {
+    if (param) localStorage.setItem('minimapper_equipos', param);
+    else grupo = localStorage.getItem('minimapper_equipos');
+  } catch (e) {}
+  if (!grupo) return;
+  let lista;
+  try { lista = (await import('./equipos.js')).EQUIPOS[grupo]; } catch (e) { console.warn('equipos.js no cargó', e); return; }
+  if (!Array.isArray(lista) || !lista.length) return;
+  let elegido = '';
+  try { elegido = localStorage.getItem('minimapper_equipo') || ''; } catch (e) {}
+  equipos = { grupo, lista, elegido: lista.some(e => e.id === elegido) ? elegido : '' };
+  document.getElementById('equipos').hidden = false;
+  renderEquipos();
+}
+
+function elegirEquipo(id) {
+  equipos.elegido = id;
+  try { localStorage.setItem('minimapper_equipo', id); } catch (e) {}
+  renderEquipos();
+}
+
+function olvidarEquipos() {
+  try { localStorage.removeItem('minimapper_equipos'); localStorage.removeItem('minimapper_equipo'); } catch (e) {}
+  equipos = null;
+  document.getElementById('equipos').hidden = true;
+}
+
+function encenderEquipo() {
+  const e = equipos && equipos.lista.find(x => x.id === equipos.elegido);
+  if (!e) return;
+  for (const f of e.usa || []) {
+    if (fuenteEncendida(f)) continue;
+    if (f === 'camara') toggleCamaraSensor();
+    else if (f === 'mic') initMic();
+    else if (f === 'mouse') toggleMouseSensor();
+  }
+}
+
+function renderEquipos() {
+  const el = document.getElementById('equipos-cuerpo');
+  if (!el || !equipos) return;
+  const esc = (t) => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // `entre comillas invertidas` se vuelve código.
+  const texto = (t) => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>');
+  const e = equipos.lista.find(x => x.id === equipos.elegido);
+  const titulo = (x) => x.breve ? `${x.breve} · ${x.caso}` : x.caso;
+  el.innerHTML = `<div class="equipos-elegir">
+      <select onchange="elegirEquipo(this.value)">
+        <option value="" ${!e ? 'selected' : ''}>elige tu equipo</option>
+        ${equipos.lista.map(x => `<option value="${x.id}" ${e && e.id === x.id ? 'selected' : ''}>${esc(titulo(x))}</option>`).join('')}
+      </select>
+      <button onclick="olvidarEquipos()" title="Quitar esta sección. Vuelve con ?equipos=${esc(equipos.grupo)}">×</button>
+    </div>
+    ${e ? `<div class="equipo">
+      ${e.breve ? `<div class="equipo-nombre">${esc(e.breve)}</div><div class="equipo-caso">${esc(e.caso)}</div>` : `<div class="equipo-nombre">${esc(e.caso)}</div>`}
+      ${e.idea ? `<p class="equipo-idea">${texto(e.idea)}</p>` : ''}
+      ${(e.usa || []).length ? `<div class="equipo-usa">${e.usa.map(f => `<span data-fuente="${f}">${FUENTES_NOMBRE[f] || f}</span>`).join('')}
+        <button onclick="encenderEquipo()" title="Enciende las fuentes que usa este proyecto">encender</button></div>
+        <div class="equipo-lecturas" id="equipo-lecturas"></div>`
+        : `<div class="equipo-usa sin">sin interacción</div>`}
+      <ol class="equipo-receta">${(e.receta || []).map(r => `<li>${texto(r)}</li>`).join('')}</ol>
+      ${e.nota ? `<p class="montaje-nota">${texto(e.nota)}</p>` : ''}
+    </div>` : ''}`;
+  pintarEquipo();
+}
+
+function pintarEquipo() {
+  if (!equipos) return;
+  const e = equipos.lista.find(x => x.id === equipos.elegido);
+  if (!e) return;
+  document.querySelectorAll('#equipos .equipo-usa [data-fuente]').forEach(s => s.classList.toggle('encendida', fuenteEncendida(s.dataset.fuente)));
+  const out = document.getElementById('equipo-lecturas');
+  if (out) out.textContent = (e.lecturas || []).map(k => `${k} ${(sensor[k] ?? 0).toFixed(2)}`).join(' · ');
+}
+
 // --- EDITOR → SALIDA: EL CANAL ---
 // Un canal aparte de las lecturas. El editor publica lo vivo de la escena montada y la
 // salida lo aplica (ver "PRESENTAR"):
@@ -1054,7 +1510,8 @@ function estadoParaSalida() {
         local: !SALIDA && q.sourceUrl && q.sourceUrl.startsWith('blob:') ? q.sourceUrl : undefined,
         recorte: q.recorte || null,
         color: { nivel: c.nivel, saturacion: c.saturacion, tinte: c.tinte,
-                 senal: c.senal || '', destino: c.destino || 'nivel', invertir: !!c.invertir },
+                 senal: c.senal || '', destino: c.destino || 'nivel', invertir: !!c.invertir,
+                 subida: c.subida || 0, bajada: c.bajada || 0 },
       };
     }),
   };
@@ -1512,7 +1969,7 @@ function seguirQuads(datos) {
       nuevos.forEach((p, k) => { pts[k].x = p.x; pts[k].y = p.y; });
       if (forma(q) === 'quad') buildTessCache(q);
     }
-    q.color = { ...COLOR_NEUTRO, ...d.color, rampa: q.color?.rampa };
+    q.color = { ...COLOR_NEUTRO, ...d.color, rampa: q.color?.rampa, _rampa: q.color?._rampa };
     q.recorte = normalizarRecorte(d.recorte);
   });
 }
@@ -2443,6 +2900,7 @@ function initMic() {
       lastOnsetTime = 0;
       document.querySelectorAll('.mic-btn').forEach(b => b.classList.add('active'));
       document.querySelectorAll('.mic-sensitivity').forEach(el => el.style.display = '');
+      micCambio();
     })
     .catch(err => {
       const msg = err.name === 'NotAllowedError' ? 'Permiso de micrófono denegado.'
@@ -2459,6 +2917,7 @@ function stopMic() {
   micActive = false;
   document.querySelectorAll('.mic-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.mic-sensitivity').forEach(el => el.style.display = 'none');
+  micCambio();
 }
 
 function renderQuadList() {
@@ -2545,7 +3004,9 @@ function renderQuadList() {
           ${[['nivel', 'nivel'], ['saturacion', 'saturación'], ['tinte', 'tinte']].map(([v, t]) =>
             `<option value="${v}" ${(c.destino || 'nivel') === v ? 'selected' : ''}>${t}</option>`).join('')}
         </select><span></span></label>
-        <label>invertir<button class="${c.invertir ? 'activo' : ''}" onclick="toggleQuadInvertir(${i})">${c.invertir ? 'sí' : 'no'}</button><span></span></label>` : ''}
+        <label>invertir<button class="${c.invertir ? 'activo' : ''}" onclick="toggleQuadInvertir(${i})">${c.invertir ? 'sí' : 'no'}</button><span></span></label>
+        ${RAMPA_CAMPOS.map(k => `<label title="${k === 'subida' ? 'Segundos para ir de 0 a 1 cuando la lectura sube' : 'Segundos para volver cuando la lectura baja'}. 0 = de golpe">${k}<input type="range" min="0" max="10" step="0.1" value="${c[k] || 0}" onpointerdown="undoColor()" onkeydown="undoColor(event)"
+          oninput="setQuadColor(${i},'${k}',this.value)" onchange="saveToLocalStorage()"><output id="color-${k}-${i}">${segundos(c[k])}</output></label>`).join('')}` : ''}
       </div>`;
 
     div.innerHTML = `

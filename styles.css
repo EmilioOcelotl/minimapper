@@ -4,6 +4,21 @@ body {
   background: black;
 }
 
+/* --- Barras de desplazamiento: una sola, delgada y oscura, en toda la app ---
+   Chrome y Safari usan ::-webkit-scrollbar; Firefox, scrollbar-width y scrollbar-color.
+   Chrome ignora ::-webkit-scrollbar en cuanto un elemento tiene scrollbar-color, por eso
+   las propiedades estándar van sólo donde no existe el pseudoelemento. */
+*::-webkit-scrollbar { width: 4px; height: 4px; }
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner { background: transparent; }
+*::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 2px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.32); }
+*::-webkit-scrollbar-button { display: none; }
+
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.18) transparent; }
+}
+
 /* --- Lengüeta toggle --- */
 #toggle-btn {
   position: fixed;
@@ -199,23 +214,6 @@ label {
   min-height: 0;
 }
 
-#quad-list::-webkit-scrollbar {
-  width: 4px;
-}
-
-#quad-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-#quad-list::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
-  border-radius: 2px;
-}
-
-#quad-list::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.32);
-}
-
 .quad-item {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.07);
@@ -321,7 +319,8 @@ label {
   min-width: 0;
 }
 
-.mic-sensitivity {
+.mic-sensitivity,
+.sensor-ajuste {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -336,7 +335,8 @@ label {
   flex-shrink: 0;
 }
 
-.mic-sensitivity input[type="range"] {
+.mic-sensitivity input[type="range"],
+.sensor-ajuste input[type="range"] {
   flex: 1;
   min-width: 0;
   width: 0;
@@ -533,22 +533,22 @@ select option {
 #welcome-box {
   position: relative;
   width: 100%;
-  max-width: 480px;
-  max-height: 85vh;
+  max-width: 420px;
+  max-height: 70vh;
   overflow-y: auto;
-  background: rgba(10, 10, 10, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 10px;
-  padding: 28px 28px 24px;
+  background: rgba(0, 0, 0, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 22px 22px 18px;
   color: #e0e0e0;
   font-family: monospace;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
 #welcome-box h2 {
-  margin: 0 0 12px 0;
-  font-size: 20px;
+  margin: 0 0 10px 0;
+  font-size: 16px;
   color: white;
   letter-spacing: 0.5px;
 }
@@ -648,15 +648,6 @@ select option {
   overflow-x: auto;
   padding-bottom: 4px;
   margin-bottom: 8px;
-}
-
-#scenes-strip::-webkit-scrollbar {
-  height: 3px;
-}
-#scenes-strip::-webkit-scrollbar-track { background: transparent; }
-#scenes-strip::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 2px;
 }
 
 .scene-item {
@@ -1198,9 +1189,103 @@ body.salida.dos:not(.completa) #letra-salida {
   margin-top: 6px;
 }
 
+#sensor-mic {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Lo que oye el mic, de 0 a 1: el mismo volumen que se publica */
+#sensor-medidor {
+  height: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+#sensor-medidor i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: rgb(90, 230, 150);
+}
+
 #sensor-nota:empty,
 #sensor-xy[hidden],
-#sensor-camara[hidden] { display: none; }
+#sensor-camara[hidden],
+#sensor-mic[hidden],
+#equipos[hidden] { display: none; }
+
+/* --- Sonido: pistas (renderPistas) --- */
+.pista.sonando .quad-label::before {
+  content: '♪ ';
+  color: rgb(90, 230, 150);
+}
+
+/* --- Equipos: una tarjeta por proyecto (renderEquipos, equipos.js) --- */
+.equipos-elegir {
+  display: flex;
+  gap: 6px;
+}
+
+.equipos-elegir select { flex: 1; min-width: 0; margin: 0; font-size: 11px; }
+.equipos-elegir button { margin: 0; padding: 0 8px; flex: none; }
+
+.equipo {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 2px solid rgb(255, 200, 64);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.equipo-nombre { font-size: 13px; color: #fff; }
+.equipo-caso { font-size: 10px; color: rgba(255, 255, 255, 0.4); }
+.equipo-idea { margin: 6px 0 0; color: rgba(255, 255, 255, 0.55); }
+
+.equipo-usa {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.equipo-usa span {
+  font-family: monospace;
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.equipo-usa span.encendida { border-color: rgb(90, 230, 150); color: rgb(90, 230, 150); }
+.equipo-usa button { margin: 0 0 0 auto; padding: 1px 8px; font-size: 10px; }
+.equipo-usa.sin { font-family: monospace; font-size: 10px; color: rgba(255, 255, 255, 0.4); }
+
+.equipo-lecturas {
+  margin-top: 6px;
+  font-family: monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.equipo-lecturas:empty { display: none; }
+
+.equipo-receta {
+  margin: 8px 0 0;
+  padding-left: 16px;
+}
+
+.equipo-receta li + li { margin-top: 4px; }
+
+.equipo code {
+  font-family: monospace;
+  font-size: 10px;
+  color: rgb(255, 200, 64);
+  overflow-wrap: anywhere;
+}
 
 /* --- Estado de las lecturas y de la salida --- */
 #senal-estado,
@@ -1222,6 +1307,8 @@ body.salida.dos:not(.completa) #letra-salida {
   color: rgba(255, 255, 255, 0.2);
 }
 
+/* Con siete lecturas no caben en una línea */
+#senal-estado { white-space: normal; line-height: 1.5; }
 #senal-estado.vivo { color: rgba(255, 255, 255, 0.7); }
 #senal-estado.vivo::before { color: rgb(90, 230, 150); }
 #salida-estado.vivo { color: rgba(255, 255, 255, 0.7); }

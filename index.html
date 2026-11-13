@@ -122,22 +122,53 @@
     </div>
 
     <div class="pestana" data-pestana="interaccion" role="tabpanel">
+    <!-- Sólo con ?equipos=<grupo> (o si ya se abrió así): ver equipos.js -->
+    <div class="panel-section" id="equipos" hidden>
+      <div class="section-label">equipos</div>
+      <div id="equipos-cuerpo"></div>
+    </div>
+
     <div class="panel-section interaccion">
+      <div class="section-label">fuentes</div>
       <div class="section-actions">
         <button id="sensor-mouse-btn" onclick="toggleMouseSensor()"
           title="Un recuadro: arrastra dentro y publica x e y, de 0 a 1. Elígelas como señal de un quad o léelas en Hydra con sensor.x">mouse</button>
         <button id="sensor-camara-btn" onclick="toggleCamaraSensor()"
-          title="Detecta la cara más grande y publica cercania y cerca. Nada se graba ni sale de esta computadora">cámara</button>
+          title="Detecta la cara más grande y publica cercania, cerca, cara_x y movimiento. Nada se graba ni sale de esta computadora">cámara</button>
+        <button id="sensor-mic-btn" class="mic-btn" onclick="toggleMic()"
+          title="El micrófono publica volumen, de 0 a 1. Es el mismo que avanza el carrusel con el aplauso">mic</button>
       </div>
       <div id="sensor-xy" hidden><i></i></div>
       <div id="sensor-camara" hidden>
         <canvas id="sensor-vista" width="160" height="120" aria-label="Lo que ve la cámara"></canvas>
-        <label class="mic-sensitivity"><span class="sensitivity-label">umbral</span>
+        <label class="sensor-ajuste"><span class="sensitivity-label">umbral</span>
           <input id="sensor-umbral" type="range" min="0.05" max="0.95" step="0.01" value="0.45"></label>
       </div>
+      <div id="sensor-mic" hidden>
+        <div id="sensor-medidor"><i></i></div>
+        <label class="sensor-ajuste" title="Cuánto hay que hacer ruido para llegar a 1"><span class="sensitivity-label">ganancia</span>
+          <input id="sensor-ganancia" type="range" min="1" max="60" step="1" value="12"></label>
+      </div>
       <div id="sensor-nota"></div>
-      <div id="senal-estado" title="Las lecturas que llegan: elígelas como señal de un quad o léelas en Hydra con sensor.nombre">señal · enciende el mouse o la cámara</div>
+      <div id="senal-estado" title="Las lecturas que llegan: elígelas como señal de un quad o de una pista, o léelas en Hydra con sensor.nombre o rampa('nombre', segundos)">señal · enciende el mouse, la cámara o el mic</div>
     </div>
+
+    <div class="panel-section">
+      <div class="section-label">escena por señal</div>
+      <!-- Lo dibuja renderEscenaSenal() -->
+      <div id="escena-senal"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="section-label">sonido</div>
+      <button class="wide-btn" onclick="agregarPista()"
+        title="Un archivo de audio o un enlace. Suena desde esta ventana, no desde la salida">
+        <span class="wide-icon">+</span>Pista
+      </button>
+      <!-- Lo dibuja renderPistas() -->
+      <div id="pistas"></div>
+    </div>
+
     </div>
 
     <div class="pestana" data-pestana="salidas" role="tabpanel">
