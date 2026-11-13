@@ -1,4 +1,4 @@
-// El detector de caras (y de manos) de la sección "interacción" del panel, como módulo: sketch.js lo
+// El detector de caras (y de manos y silueta) de la sección "interacción" del panel, como módulo: sketch.js lo
 // carga con import() sólo al encender la cámara, así index.html sigue ligero.
 //
 // Una lectura = un nombre, un número de 0 a 1 y lo que mide. Agregar una lectura es sumar
@@ -19,6 +19,11 @@ export const LECTURAS = [
   { nombre: 'mano2', que: '1 si ve una segunda mano', manos: true, evento: true },
   { nombre: 'mano2_x', que: 'la segunda mano, de izquierda a derecha', manos: true },
   { nombre: 'mano2_y', que: 'la segunda mano, de abajo a arriba', manos: true },
+  // La silueta, con el botón "silueta": un segmentador separa a la persona del fondo. La
+  // máscara es una imagen (lector.mascara, que sketch.js pone en el global `silueta` para
+  // Hydra); aquí van los números que salen de ella.
+  { nombre: 'presencia', que: 'cuánto del cuadro es persona: un cuerpo de frente a media distancia anda por 0.2–0.4', silueta: true },
+  { nombre: 'silueta_x', que: 'el centro de la persona, de izquierda (0) a derecha (1), en espejo. Sin nadie se queda donde estaba', silueta: true },
 ]
 
 // La diferencia entre cuadros se hace sobre una copia chica de la cámara, en gris. Un
@@ -28,6 +33,7 @@ const MOV_AN = 64, MOV_AL = 48, MARGEN = 0.08
 const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1'
 const MODELO = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite'
 const MODELO_MANOS = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task'
+const MODELO_SILUETA = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite'
 // El punto de la mano que se publica: 9 es el nudillo del dedo medio, el centro de la palma.
 const PALMA = 9
 
@@ -38,6 +44,8 @@ export function crearLector ({ delegados = ['GPU', 'CPU'], umbral = 0.45 } = {})
   let detector = null, cargando = null, ultimo = -1, crudo = 0, antes = performance.now()
   let x = 0.5, mov = 0, movCrudo = 0, anterior = null, lienzo = null
   let vision = null, fileset = null, manos = null, cargandoManos = null, ocupado = false
+  let segmentador = null, cargandoSilueta = null, ocupadaSilueta = false
+  let presencia = 0, presenciaCruda = 0, siluetaX = 0.5, siluetaXCruda = 0.5
   // Las dos manos, ya suavizadas. `ve` es si el último cuadro la encontró.
   const palmas = [{ x: 0.5, y: 0.5, ve: false }, { x: 0.5, y: 0.5, ve: false }]
   let crudas = []
@@ -87,30 +95,51 @@ export function crearLector ({ delegados = ['GPU', 'CPU'], umbral = 0.45 } = {})
     throw error
   }
 
-  // Las manos corren en manos-worker.js: el modelo tarda unos 60 ms por cuadro, y en este
-  // hilo frenaba el dibujo. Un cuadro a la vez: mientras el worker piensa, no se manda otro.
-  function crearManos () {
+  // Manos y silueta corren cada una en su worker: el modelo de manos tarda unos 60 ms por
+  // cuadro, y en este hilo frenaba el dibujo. Un cuadro a la vez por worker: mientras
+  // piensa, no se le manda otro. `nombre` sólo sirve para los avisos.
+  function abrirWorker (archivo, modelo, nombre, alResultado, alError) {
     return new Promise((resolver, fallar) => {
-      const w = new Worker(new URL('./manos-worker.js', import.meta.url), { type: 'module' })
+      const w = new Worker(new URL(archivo, import.meta.url), { type: 'module' })
+      let listo = false
       w.onmessage = ({ data }) => {
-        if (data.tipo === 'listo') { manos = w; resolver() }
-        else if (data.tipo === 'manos') { ocupado = false; if (lector.conManos) ubicarManos(data) }
+        if (data.tipo === 'listo') { listo = true; resolver(w) }
         else if (data.tipo === 'error') {
-          ocupado = false
-          if (!manos) { w.terminate(); fallar(new Error('no se pudo cargar el modelo de manos: ' + data.mensaje)) }
-          else console.warn('manos:', data.mensaje)
-        }
+          alError()
+          if (!listo) { w.terminate(); fallar(new Error(`no se pudo cargar el modelo de ${nombre}: ` + data.mensaje)) }
+          else console.warn(nombre + ':', data.mensaje)
+        } else alResultado(data)
       }
-      w.onerror = (e) => { w.terminate(); fallar(new Error('no se pudo abrir el detector de manos: ' + (e.message || e))) }
-      w.postMessage({ tipo: 'cargar', mp: MP, modelo: MODELO_MANOS })
+      w.onerror = (e) => { w.terminate(); fallar(new Error(`no se pudo abrir el detector de ${nombre}: ` + (e.message || e))) }
+      w.postMessage({ tipo: 'cargar', mp: MP, modelo })
     })
   }
 
-  function mandarCuadro (video) {
-    ocupado = true
+  function crearManos () {
+    return abrirWorker('./manos-worker.js', MODELO_MANOS, 'manos',
+      (data) => { ocupado = false; if (lector.conManos) ubicarManos(data) },
+      () => { ocupado = false })
+      .then(w => { manos = w })
+  }
+
+  function crearSilueta () {
+    return abrirWorker('./silueta-worker.js', MODELO_SILUETA, 'silueta',
+      (data) => {
+        ocupadaSilueta = false
+        if (!lector.conSilueta) return
+        lector.mascara = { bytes: data.bytes, w: data.w, h: data.h, n: (lector.mascara?.n || 0) + 1 }
+        presenciaCruda = data.presencia
+        if (data.presencia > 0.02) siluetaXCruda = 1 - data.x
+      },
+      () => { ocupadaSilueta = false })
+      .then(w => { segmentador = w })
+  }
+
+  // Un ImageBitmap por worker: se transfiere, así que cada uno necesita el suyo.
+  function mandarCuadro (video, w, alFallar) {
     createImageBitmap(video)
-      .then(img => { if (manos) manos.postMessage({ tipo: 'cuadro', img, t: performance.now() }, [img]); else { img.close(); ocupado = false } })
-      .catch(() => { ocupado = false })
+      .then(img => { if (w()) w().postMessage({ tipo: 'cuadro', img, t: performance.now() }, [img]); else { img.close(); alFallar() } })
+      .catch(alFallar)
   }
 
   // Las palmas del cuadro, en espejo y con y hacia arriba. Con dos, cada una va a la ranura
@@ -133,6 +162,13 @@ export function crearLector ({ delegados = ['GPU', 'CPU'], umbral = 0.45 } = {})
     get manos () { return lector.conManos ? crudas : [] },
     conManos: false,
     get listo () { return !!detector },
+    conSilueta: false,
+    mascara: null,   // { bytes, w, h, n }: la última máscara, n cuenta las que llegaron
+
+    cargarSilueta () {
+      if (!cargandoSilueta) cargandoSilueta = crearSilueta().catch(e => { cargandoSilueta = null; throw e })
+      return cargandoSilueta
+    },
 
     cargarManos () {
       if (!cargandoManos) cargandoManos = crearManos().catch(e => { cargandoManos = null; throw e })
@@ -158,7 +194,9 @@ export function crearLector ({ delegados = ['GPU', 'CPU'], umbral = 0.45 } = {})
         lector.caja = r.detections.map(d => d.boundingBox).sort((a, b) => b.width - a.width)[0] || null
         movCrudo = diferencia(video)
       }
-      if (listo && manos && lector.conManos && !ocupado) mandarCuadro(video)
+      if (listo && manos && lector.conManos && !ocupado) { ocupado = true; mandarCuadro(video, () => manos, () => { ocupado = false }) }
+      if (listo && segmentador && lector.conSilueta && !ocupadaSilueta) { ocupadaSilueta = true; mandarCuadro(video, () => segmentador, () => { ocupadaSilueta = false }) }
+      if (!listo || !lector.conSilueta) { presenciaCruda = 0; lector.mascara = null }
       if (!listo || !lector.conManos) { crudas = []; palmas.forEach(p => { p.ve = false }) }
       if (!listo) { movCrudo = 0; anterior = null }
       const medida = listo && lector.caja ? Math.min(1, lector.caja.width / video.videoWidth / 0.5) : 0
@@ -172,6 +210,10 @@ export function crearLector ({ delegados = ['GPU', 'CPU'], umbral = 0.45 } = {})
       valores.cerca = crudo > lector.umbral ? 1 : 0
       valores.cara_x = Math.min(1, Math.max(0, x))
       valores.movimiento = mov
+      presencia += (presenciaCruda - presencia) * k
+      siluetaX += (siluetaXCruda - siluetaX) * k
+      valores.presencia = presencia
+      valores.silueta_x = Math.min(1, Math.max(0, siluetaX))
       palmas.forEach((p, i) => {
         if (p.ve && p.meta) { p.x += (p.meta.x - p.x) * k; p.y += (p.meta.y - p.y) * k }
         const n = i ? 'mano2' : 'mano'
@@ -188,6 +230,12 @@ export function crearLector ({ delegados = ['GPU', 'CPU'], umbral = 0.45 } = {})
       manos?.terminate()
       manos = null
       ocupado = false
+      segmentador?.terminate()
+      segmentador = null
+      cargandoSilueta = null
+      ocupadaSilueta = false
+      lector.conSilueta = false
+      lector.mascara = null
       cargandoManos = null
       lector.conManos = false
       cargando = null

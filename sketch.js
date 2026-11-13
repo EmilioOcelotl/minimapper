@@ -858,7 +858,7 @@ setInterval(seguirVideosPorSenal, 100);
 // Arranca con todas en 0: así un sketch con () => sensor.cercania funciona aunque no haya
 // nada encendido, y la lista no se redibuja al llegar la primera.
 // `x` e `y` las publica el recuadro de la sección "interacción" (ver INTERACCIÓN, abajo).
-var sensor = { cercania: 0, cerca: 0, cara_x: 0, movimiento: 0, volumen: 0, x: 0, y: 0, mano: 0, mano_x: 0, mano_y: 0 };
+var sensor = { cercania: 0, cerca: 0, cara_x: 0, movimiento: 0, volumen: 0, x: 0, y: 0, mano: 0, mano_x: 0, mano_y: 0, presencia: 0 };
 let sensorUltimo = 0;
 const SENSOR_CANAL = 'minimapper-lecturas';
 let canalSensor = null;
@@ -970,7 +970,7 @@ setInterval(() => {
 const INTERACCION_HZ = 20;
 const interaccion = {
   mouse: false, xy: { x: 0.5, y: 0.5 },
-  camara: false, lector: null, video: null, cuadroUltimo: 0, manos: false,
+  camara: false, lector: null, video: null, cuadroUltimo: 0, manos: false, silueta: false,
   volumen: 0, micBuffer: null,
 };
 
@@ -1117,6 +1117,7 @@ async function toggleCamaraSensor() {
 function detenerCamaraSensor() {
   const estaba = interaccion.camara;
   if (interaccion.manos) apagarManos();
+  if (interaccion.silueta) apagarSilueta();
   interaccion.video?.srcObject?.getTracks().forEach(t => t.stop());
   interaccion.video = null;
   interaccion.camara = false;
@@ -1159,6 +1160,113 @@ function apagarManos() {
   publicarLecturas({ mano: 0, mano2: 0 });
 }
 
+// --- SILUETA ---
+// El botón "silueta" corre un segmentador sobre la cámara del sensor (ver interaccion.js y
+// silueta-worker.js) y pinta la máscara en `silueta`, un canvas global de 320×240: blanco
+// donde hay persona, negro donde no, en espejo como la miniatura. Hydra lo usa de fuente:
+//   s0.init({ src: silueta })
+//   osc(10).modulate(src(s0), () => rampa('presencia', 0.5, 2) * 0.3).out(o0)
+// Las lecturas `presencia` y `silueta_x` viajan como las demás. La imagen llega a la salida
+// como un stream del canvas (captureStream), por la misma referencia de window.open() que
+// presta la cámara y la pantalla (entregarFuentes): la salida no abre otra cámara ni corre
+// otro modelo. El tamaño es fijo porque Hydra crea la textura una vez, al hacer init().
+var silueta = document.createElement('canvas');
+silueta.width = 320;
+silueta.height = 240;
+let siluetaCruda = null, siluetaN = 0, siluetaStream = null;
+
+function borrarSilueta() {
+  const ctx = silueta.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, silueta.width, silueta.height);
+}
+borrarSilueta();
+
+function pintarSilueta(m) {
+  if (!m || m.n === siluetaN) return;
+  siluetaN = m.n;
+  if (!siluetaCruda || siluetaCruda.width !== m.w || siluetaCruda.height !== m.h) {
+    siluetaCruda = document.createElement('canvas');
+    siluetaCruda.width = m.w;
+    siluetaCruda.height = m.h;
+  }
+  const img = new ImageData(m.w, m.h);
+  for (let i = 0; i < m.bytes.length; i++) {
+    img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = m.bytes[i];
+    img.data[i * 4 + 3] = 255;
+  }
+  siluetaCruda.getContext('2d').putImageData(img, 0, 0);
+  const ctx = silueta.getContext('2d');
+  ctx.save();
+  ctx.translate(silueta.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(siluetaCruda, 0, 0, silueta.width, silueta.height);
+  ctx.restore();
+}
+
+async function toggleSiluetaSensor() {
+  if (interaccion.silueta) return apagarSilueta();
+  const btn = document.getElementById('sensor-silueta-btn');
+  if (!interaccion.camara) await toggleCamaraSensor();
+  if (!interaccion.camara) return;
+  btn.disabled = true;
+  try {
+    avisarCamara('cargando el modelo de silueta…');
+    await interaccion.lector.cargarSilueta();
+    if (!interaccion.camara) return;
+    interaccion.lector.conSilueta = true;
+    interaccion.silueta = true;
+    if (!siluetaStream && silueta.captureStream) siluetaStream = silueta.captureStream(INTERACCION_HZ);
+    btn.classList.add('active');
+    avisarCamara('');
+  } catch (e) {
+    console.error(e);
+    avisarCamara(e.message || String(e), true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function apagarSilueta() {
+  interaccion.silueta = false;
+  if (interaccion.lector) interaccion.lector.conSilueta = false;
+  document.getElementById('sensor-silueta-btn')?.classList.remove('active');
+  borrarSilueta();
+  publicarLecturas({ presencia: 0 });
+  entregarFuentes();
+}
+
+// En la salida: la silueta del editor, un <video> con un clon de su stream, copiado al
+// canvas `silueta` de esta ventana para que el Hydra de aquí lo lea igual.
+let siluetaPrestada = null;   // { id, videoEl }
+
+function recibirSilueta(stream) {
+  if (!SALIDA) return;
+  if (siluetaPrestada && (!stream || stream.id !== siluetaPrestada.id)) soltarSilueta();
+  if (!stream || siluetaPrestada) return;
+  const videoEl = document.createElement('video');
+  videoEl.muted = true;
+  videoEl.playsInline = true;
+  videoEl.srcObject = stream.clone();
+  videoEl.play().catch(() => {});
+  siluetaPrestada = { id: stream.id, videoEl };
+}
+
+function soltarSilueta() {
+  if (!siluetaPrestada) return;
+  siluetaPrestada.videoEl.srcObject?.getTracks().forEach(t => t.stop());
+  siluetaPrestada.videoEl.srcObject = null;
+  siluetaPrestada = null;
+  borrarSilueta();
+}
+
+if (SALIDA) setInterval(() => {
+  if (!siluetaPrestada) return;
+  if (!editorQueAbrio()) return soltarSilueta();
+  const v = siluetaPrestada.videoEl;
+  if (v.readyState >= 2) silueta.getContext('2d').drawImage(v, 0, 0, silueta.width, silueta.height);
+}, 1000 / 30);
+
 // Bucle propio, no en draw(): un cuadro de cámara a la vez, a no más de INTERACCION_HZ.
 // detectForVideo es síncrono (2–4 ms con este modelo) y en draw() frenaría el mapeo.
 function cuadroCamara(video) {
@@ -1170,6 +1278,7 @@ function cuadroCamara(video) {
   if (ahora - interaccion.cuadroUltimo < 1000 / INTERACCION_HZ) return otra();
   interaccion.cuadroUltimo = ahora;
   interaccion.lector.leer(video, ahora);
+  if (interaccion.silueta) pintarSilueta(interaccion.lector.mascara);
   const ui = document.getElementById('ui');
   if (uiVisible && !ui.classList.contains('collapsed') && pestanaActiva === 'interaccion') pintarVistaCamara(video, interaccion.lector);
   otra();
@@ -1192,6 +1301,22 @@ function pintarVistaCamara(video, lector) {
     ctx.strokeRect(c.originX * sx, c.originY * sy, c.width * sx, c.height * sy);
   }
   ctx.restore();
+  // La silueta, encima, en verde: ya viene en espejo. Se tiñe en un canvas aparte
+  // (multiplicar por verde deja negro el fondo) y se suma con 'screen'.
+  if (interaccion.silueta) {
+    const t = pintarVistaCamara.tinta || (pintarVistaCamara.tinta = document.createElement('canvas'));
+    t.width = cv.width; t.height = cv.height;
+    const tc = t.getContext('2d');
+    tc.drawImage(silueta, 0, 0, t.width, t.height);
+    tc.globalCompositeOperation = 'multiply';
+    tc.fillStyle = 'rgb(40,200,110)';
+    tc.fillRect(0, 0, t.width, t.height);
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.globalAlpha = 0.8;
+    ctx.drawImage(t, 0, 0);
+    ctx.restore();
+  }
   // Las palmas ya vienen en espejo, como la miniatura: se pintan sin voltear.
   ctx.fillStyle = 'rgb(255,200,64)';
   for (const m of lector.manos) {
@@ -1516,10 +1641,10 @@ function renderPistas() {
 // se bajan con ?equipos=<grupo>; el grupo se recuerda, y × lo olvida. Así la herramienta
 // pública no carga los proyectos de un salón.
 let equipos = null;   // { grupo, lista, elegido }
-const FUENTES_NOMBRE = { camara: 'cámara', manos: 'manos', mic: 'mic', mouse: 'mouse' };
+const FUENTES_NOMBRE = { camara: 'cámara', manos: 'manos', silueta: 'silueta', mic: 'mic', mouse: 'mouse' };
 
 function fuenteEncendida(f) {
-  return f === 'camara' ? interaccion.camara : f === 'manos' ? interaccion.manos : f === 'mic' ? micActive : f === 'mouse' ? interaccion.mouse : false;
+  return f === 'camara' ? interaccion.camara : f === 'manos' ? interaccion.manos : f === 'silueta' ? interaccion.silueta : f === 'mic' ? micActive : f === 'mouse' ? interaccion.mouse : false;
 }
 
 async function iniciarEquipos() {
@@ -1571,6 +1696,7 @@ function encenderEquipo() {
     if (fuenteEncendida(f)) continue;
     if (f === 'camara') toggleCamaraSensor();
     else if (f === 'manos') toggleManosSensor();
+    else if (f === 'silueta') toggleSiluetaSensor();
     else if (f === 'mic') initMic();
     else if (f === 'mouse') toggleMouseSensor();
   }
@@ -2147,7 +2273,10 @@ function entregarFuentes() {
   const lista = fuentesParaSalida();
   for (const w of Object.values(ventanasSalida)) {
     if (!w || w.closed) continue;
-    try { w.recibirFuentes?.(scenes[currentSceneIndex]?.id, lista); }
+    try {
+      w.recibirFuentes?.(scenes[currentSceneIndex]?.id, lista);
+      w.recibirSilueta?.(interaccion.silueta ? siluetaStream : null);
+    }
     catch (e) { console.warn('no se pudieron pasar las fuentes a la salida', e); }
   }
 }

@@ -1399,9 +1399,12 @@ body.salida canvas {
   cursor: none;
 }
 
-/* Cuatro fuentes en una fila (mouse, cámara, manos, mic): sin el padding lateral de
-   siempre, para que quepan en el ancho del panel. */
+/* Cinco fuentes (mouse, cámara, manos, silueta, mic): en dos filas, tres y dos. */
+.interaccion .section-actions {
+  flex-wrap: wrap;
+}
 .interaccion .section-actions button {
+  flex: 1 1 30%;
   min-width: 0;
   padding-left: 2px;
   padding-right: 2px;

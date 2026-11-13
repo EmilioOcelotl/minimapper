@@ -59,7 +59,7 @@
         <p><strong>Fuente:</strong> Rejilla, Hydra, Video, Imagen, Cámara, Pantalla o Carrusel. Cada superficie con Hydra tiene su editor y su salida (o0–o3): CTRL+Enter o ▶ para ejecutar</p>
         <p><strong>Pantalla:</strong> proyecta otra pestaña o aplicación, por ejemplo YouTube. Hay que volver a elegirla al recargar</p>
         <p><strong>Presentar:</strong> abre la salida en otra ventana. Llévala al proyector y dale doble clic para pantalla completa. Sigue lo que hagas en el editor</p>
-        <p><strong>Interacción:</strong> mouse, cámara, manos y mic dan lecturas de 0 a 1. Elígelas como señal de una superficie o de una pista de sonido, o léelas en Hydra con <code>sensor.cercania</code> o <code>rampa('cercania', 2)</code></p>
+        <p><strong>Interacción:</strong> mouse, cámara, manos, silueta y mic dan lecturas de 0 a 1. Elígelas como señal de una superficie o de una pista de sonido, o léelas en Hydra con <code>sensor.cercania</code> o <code>rampa('cercania', 2)</code></p>
         <p><strong>Atajos:</strong> CTRL + SHIFT + H muestra u oculta el panel · ESC silencia o cancela · CTRL + Z deshace</p>
         <p><strong>Guardar:</strong> todo se guarda solo en este navegador; los videos y archivos locales se vuelven a cargar al abrir. "Guardar sesión" descarga un <code>.json</code> para llevarlo a otra computadora; "Cargar sesión" lo abre y <em>reemplaza</em> lo que hay</p>
       </details>
@@ -147,6 +147,8 @@
           title="Detecta la cara más grande y publica cercania, cerca, cara_x y movimiento. Nada se graba ni sale de esta computadora">cámara</button>
         <button id="sensor-manos-btn" onclick="toggleManosSensor()"
           title="Con la misma cámara, busca hasta dos manos y publica mano, mano_x, mano_y (y mano2…), de 0 a 1. La imagen de la cámara no se proyecta">manos</button>
+        <button id="sensor-silueta-btn" onclick="toggleSiluetaSensor()"
+          title="Con la misma cámara, separa a la persona del fondo. Publica presencia y silueta_x, y la máscara se lee en Hydra con s0.init({ src: silueta })">silueta</button>
         <button id="sensor-mic-btn" class="mic-btn" onclick="toggleMic()"
           title="El micrófono publica volumen, de 0 a 1. Es el mismo que avanza el carrusel con el aplauso">mic</button>
       </div>

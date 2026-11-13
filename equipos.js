@@ -121,6 +121,21 @@ export const EQUIPOS = {
       nota: 'La cámara tiene que ver la cara de quien se acerca a la mesa, no la proyección.',
     },
     {
+      id: 'aura',
+      caso: 'Aura',
+      breve: 'Aura',
+      idea: 'Una textura de Hydra que el cuerpo de quien está enfrente deforma.',
+      usa: ['silueta'],
+      lecturas: ['presencia', 'silueta_x'],
+      receta: [
+        'Arriba del código: `s0.init({ src: silueta })`. La silueta es blanca donde hay persona y negra donde no.',
+        'Antes de `.out(o0)`: `.modulate(src(s0), () => rampa(\'presencia\', 0.5, 2) * 0.3)`. Sin nadie no pasa nada; al llegar alguien, el cuerpo empuja la textura.',
+        'Con `.mask(src(s0))` la textura se ve sólo dentro del cuerpo; con `.mult(src(s0).invert())`, sólo fuera.',
+        'Silueta enciende la cámara sola. La cámara no se proyecta: sólo la máscara, dentro de su código.',
+      ],
+      nota: 'El modelo espera a la persona de frente y a media distancia, como en una videollamada. Que la cámara no vea la proyección.',
+    },
+    {
       id: 'lineas',
       caso: 'Líneas que observan',
       breve: '',
