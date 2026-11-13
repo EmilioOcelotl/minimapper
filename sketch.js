@@ -743,7 +743,7 @@ function colorParaGuardar(c) {
   if (colorEsNeutro(c)) return null;
   const out = { nivel: c.nivel, saturacion: c.saturacion, tinte: c.tinte };
   if (c.senal) Object.assign(out, { senal: c.senal, destino: c.destino || 'nivel', invertir: !!c.invertir,
-                                    subida: c.subida || 0, bajada: c.bajada || 0 });
+                                    subida: c.subida || 0, bajada: c.bajada || 0, video: !!c.video });
   return out;
 }
 
@@ -797,6 +797,15 @@ function setQuadDestino(index, destino) {
   saveToLocalStorage();
 }
 
+// Un quad de video con señal puede, además, reproducirse sólo con ella (ver
+// seguirVideosPorSenal, abajo).
+function toggleQuadVideo(index) {
+  const c = quadColor(quads[index]);
+  c.video = !c.video;
+  renderQuadList();
+  saveToLocalStorage();
+}
+
 function toggleQuadInvertir(index) {
   pushUndo();
   const c = quadColor(quads[index]);
@@ -804,6 +813,40 @@ function toggleQuadInvertir(index) {
   renderQuadList();
   saveToLocalStorage();
 }
+
+// --- VIDEO POR SEÑAL ---
+// Con `color.video`, el video del quad corre mientras la señal está arriba y se detiene
+// cuando la rampa termina de bajar: se acerca alguien, el video aparece (nivel) y arranca;
+// se va, se apaga y vuelve al principio, para que la siguiente persona lo vea desde el
+// inicio. Sigue a la rampa, no a la lectura cruda, así que la bajada es el fundido de
+// salida. Corre en el editor y en la salida: cada una tiene su propio <video> y su rampa,
+// con las mismas lecturas. Sólo videos (archivo o enlace): la cámara y la pantalla no.
+function videoDeQuad(q) {
+  if (q.sourceType !== 'video') return null;
+  if (q.sourceVideo) return q.sourceVideo;
+  const el = q.sourceEl && q.sourceEl.elt;
+  return el instanceof HTMLVideoElement ? el : null;
+}
+
+function seguirVideosPorSenal() {
+  for (const q of quads) {
+    const el = videoDeQuad(q);
+    if (!el) continue;
+    const c = q.color || {};
+    const manda = !!(c.senal && c.video);
+    if (manda) {
+      const arriba = (c.rampa ?? 0) > 0.001;
+      if (arriba && el.paused) el.play().catch(() => {});
+      else if (!arriba && !el.paused) { el.pause(); el.currentTime = 0; }
+      q._videoPorSenal = true;
+    } else if (q._videoPorSenal) {
+      // Se quitó la opción: el video vuelve a correr siempre, como cualquier otro.
+      q._videoPorSenal = false;
+      if (el.paused) el.play().catch(() => {});
+    }
+  }
+}
+setInterval(seguirVideosPorSenal, 100);
 
 // --- LECTURAS ---
 // Números de 0 a 1 que se guardan en el global `sensor`, que Hydra puede leer:
@@ -1012,10 +1055,16 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!pad) return;
   pad.addEventListener('pointerdown', (e) => { pad.setPointerCapture(e.pointerId); moverXY(e); });
   pad.addEventListener('pointermove', (e) => { if (e.buttons) moverXY(e); });
+  // El umbral es calibración de la sala, no de la sesión: se recuerda en esta máquina.
   const umbral = document.getElementById('sensor-umbral');
+  const pintarUmbral = () => { const o = document.getElementById('sensor-umbral-valor'); if (o) o.textContent = parseFloat(umbral.value).toFixed(2); };
+  try { const u = parseFloat(localStorage.getItem('minimapper_umbral')); if (u > 0 && u < 1 && umbral) umbral.value = u; } catch (e) {}
+  if (umbral) pintarUmbral();
   umbral?.addEventListener('input', () => {
     if (interaccion.lector) interaccion.lector.umbral = parseFloat(umbral.value);
+    pintarUmbral();
   });
+  umbral?.addEventListener('change', () => { if (!SALIDA) try { localStorage.setItem('minimapper_umbral', umbral.value); } catch (e) {} });
   pintarXY();
 });
 
@@ -1596,7 +1645,7 @@ function estadoParaSalida() {
         recorte: q.recorte || null,
         color: { nivel: c.nivel, saturacion: c.saturacion, tinte: c.tinte,
                  senal: c.senal || '', destino: c.destino || 'nivel', invertir: !!c.invertir,
-                 subida: c.subida || 0, bajada: c.bajada || 0 },
+                 subida: c.subida || 0, bajada: c.bajada || 0, video: !!c.video },
       };
     }),
   };
@@ -3234,6 +3283,7 @@ function renderQuadList() {
             `<option value="${v}" ${(c.destino || 'nivel') === v ? 'selected' : ''}>${t}</option>`).join('')}
         </select><span></span></label>
         <label>invertir<button class="${c.invertir ? 'activo' : ''}" onclick="toggleQuadInvertir(${i})">${c.invertir ? 'sí' : 'no'}</button><span></span></label>
+        ${q.sourceType === 'video' ? `<label title="Sí: el video corre sólo con la señal arriba, y al apagarse se detiene y vuelve al principio. No: corre siempre">reproduce<button class="${c.video ? 'activo' : ''}" onclick="toggleQuadVideo(${i})">${c.video ? 'con señal' : 'siempre'}</button><span></span></label>` : ''}
         ${RAMPA_CAMPOS.map(k => `<label title="${k === 'subida' ? 'Segundos para ir de 0 a 1 cuando la lectura sube' : 'Segundos para volver cuando la lectura baja'}. 0 = de golpe">${k}<input type="range" min="0" max="10" step="0.1" value="${c[k] || 0}" onpointerdown="undoColor()" onkeydown="undoColor(event)"
           oninput="setQuadColor(${i},'${k}',this.value)" onchange="saveToLocalStorage()"><output id="color-${k}-${i}">${segundos(c[k])}</output></label>`).join('')}` : ''}
       </div>`;

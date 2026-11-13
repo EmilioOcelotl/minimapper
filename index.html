@@ -153,8 +153,8 @@
       <div id="sensor-xy" hidden><i></i></div>
       <div id="sensor-camara" hidden>
         <canvas id="sensor-vista" width="160" height="120" aria-label="Lo que ve la cámara"></canvas>
-        <label class="sensor-ajuste"><span class="sensitivity-label">umbral</span>
-          <input id="sensor-umbral" type="range" min="0.05" max="0.95" step="0.01" value="0.45"></label>
+        <label class="sensor-ajuste" title="La cercanía a partir de la cual cerca vale 1. Se recuerda en esta computadora"><span class="sensitivity-label">umbral</span>
+          <input id="sensor-umbral" type="range" min="0.05" max="0.95" step="0.01" value="0.45"><output id="sensor-umbral-valor"></output></label>
       </div>
       <div id="sensor-mic" hidden>
         <div id="sensor-medidor"><i></i></div>

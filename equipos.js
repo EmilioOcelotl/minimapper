@@ -107,6 +107,20 @@ export const EQUIPOS = {
       nota: 'Si la cámara ve la proyección, la animación se mueve y cambia la escena sola: apúntenla al muro, fuera de la imagen proyectada.',
     },
     {
+      id: 'mesa',
+      caso: 'Animación de una mesa',
+      breve: 'Flower',
+      idea: 'Sobre una mesa: al acercarse alguien, aparece un video y empieza; al irse, se apaga y se detiene.',
+      usa: ['camara'],
+      lecturas: ['cercania', 'cerca'],
+      receta: [
+        'El umbral de la cámara decide qué tan cerca es cerca: muévanlo hasta que `cerca` pase a 1 donde quieren que empiece. Se recuerda en esta computadora.',
+        'Un quad con fuente Video. Señal `cerca` → nivel, y reproduce: con señal.',
+        'Subida es lo que tarda en aparecer, bajada lo que tarda en apagarse. Al terminar de apagarse, el video se detiene y vuelve al principio.',
+      ],
+      nota: 'La cámara tiene que ver la cara de quien se acerca a la mesa, no la proyección.',
+    },
+    {
       id: 'lineas',
       caso: 'Líneas que observan',
       breve: '',
