@@ -815,7 +815,7 @@ function toggleQuadInvertir(index) {
 // Arranca con todas en 0: así un sketch con () => sensor.cercania funciona aunque no haya
 // nada encendido, y la lista no se redibuja al llegar la primera.
 // `x` e `y` las publica el recuadro de la sección "interacción" (ver INTERACCIÓN, abajo).
-var sensor = { cercania: 0, cerca: 0, cara_x: 0, movimiento: 0, volumen: 0, x: 0, y: 0 };
+var sensor = { cercania: 0, cerca: 0, cara_x: 0, movimiento: 0, volumen: 0, x: 0, y: 0, mano: 0, mano_x: 0, mano_y: 0 };
 let sensorUltimo = 0;
 const SENSOR_CANAL = 'minimapper-lecturas';
 let canalSensor = null;
@@ -927,7 +927,7 @@ setInterval(() => {
 const INTERACCION_HZ = 20;
 const interaccion = {
   mouse: false, xy: { x: 0.5, y: 0.5 },
-  camara: false, lector: null, video: null, cuadroUltimo: 0,
+  camara: false, lector: null, video: null, cuadroUltimo: 0, manos: false,
   volumen: 0, micBuffer: null,
 };
 
@@ -1067,6 +1067,7 @@ async function toggleCamaraSensor() {
 
 function detenerCamaraSensor() {
   const estaba = interaccion.camara;
+  if (interaccion.manos) apagarManos();
   interaccion.video?.srcObject?.getTracks().forEach(t => t.stop());
   interaccion.video = null;
   interaccion.camara = false;
@@ -1075,6 +1076,38 @@ function detenerCamaraSensor() {
   if (caja) caja.hidden = true;
   if (estaba) publicarLecturas(Object.fromEntries(Object.keys(interaccion.lector?.valores || { cercania: 0, cerca: 0 }).map(k => [k, 0])));
   marcarPestanaInteraccion();
+}
+
+// Manos: otro modelo sobre la misma cámara (ver interaccion.js). Encenderlo enciende la
+// cámara si no estaba; apagar la cámara las apaga. La imagen de la cámara no se proyecta
+// nunca: sólo salen los números (mano, mano_x, mano_y, mano2…).
+async function toggleManosSensor() {
+  if (interaccion.manos) return apagarManos();
+  const btn = document.getElementById('sensor-manos-btn');
+  if (!interaccion.camara) await toggleCamaraSensor();
+  if (!interaccion.camara) return;
+  btn.disabled = true;
+  try {
+    avisarCamara('cargando el modelo de manos…');
+    await interaccion.lector.cargarManos();
+    if (!interaccion.camara) return;
+    interaccion.lector.conManos = true;
+    interaccion.manos = true;
+    btn.classList.add('active');
+    avisarCamara('');
+  } catch (e) {
+    console.error(e);
+    avisarCamara(e.message || String(e), true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function apagarManos() {
+  interaccion.manos = false;
+  if (interaccion.lector) interaccion.lector.conManos = false;
+  document.getElementById('sensor-manos-btn')?.classList.remove('active');
+  publicarLecturas({ mano: 0, mano2: 0 });
 }
 
 // Bucle propio, no en draw(): un cuadro de cámara a la vez, a no más de INTERACCION_HZ.
@@ -1110,6 +1143,13 @@ function pintarVistaCamara(video, lector) {
     ctx.strokeRect(c.originX * sx, c.originY * sy, c.width * sx, c.height * sy);
   }
   ctx.restore();
+  // Las palmas ya vienen en espejo, como la miniatura: se pintan sin voltear.
+  ctx.fillStyle = 'rgb(255,200,64)';
+  for (const m of lector.manos) {
+    ctx.beginPath();
+    ctx.arc(m.x * cv.width, (1 - m.y) * cv.height, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 // --- ESCENA POR SEÑAL ---
@@ -1397,10 +1437,10 @@ function renderPistas() {
 // se bajan con ?equipos=<grupo>; el grupo se recuerda, y × lo olvida. Así la herramienta
 // pública no carga los proyectos de un salón.
 let equipos = null;   // { grupo, lista, elegido }
-const FUENTES_NOMBRE = { camara: 'cámara', mic: 'mic', mouse: 'mouse' };
+const FUENTES_NOMBRE = { camara: 'cámara', manos: 'manos', mic: 'mic', mouse: 'mouse' };
 
 function fuenteEncendida(f) {
-  return f === 'camara' ? interaccion.camara : f === 'mic' ? micActive : f === 'mouse' ? interaccion.mouse : false;
+  return f === 'camara' ? interaccion.camara : f === 'manos' ? interaccion.manos : f === 'mic' ? micActive : f === 'mouse' ? interaccion.mouse : false;
 }
 
 async function iniciarEquipos() {
@@ -1451,6 +1491,7 @@ function encenderEquipo() {
   for (const f of e.usa || []) {
     if (fuenteEncendida(f)) continue;
     if (f === 'camara') toggleCamaraSensor();
+    else if (f === 'manos') toggleManosSensor();
     else if (f === 'mic') initMic();
     else if (f === 'mouse') toggleMouseSensor();
   }
